@@ -1,6 +1,22 @@
-# Neon Static: Build 0.7 (Milestone 7, online multiplayer)
+# Neon Static: Build 0.8 (maps, art and sound, public play)
 
-**Play:** http://www.atelierulmuresan.ro/Cyberspace_Warriors/
+**Play:** https://www.atelierulmuresan.ro/Cyberspace_Warriors/
+
+## Match maps
+Pick one in the Play tab; online matches use the host's choice.
+- **Rainline Market:** three even lanes.
+- **Kowloon Docks:** long sightlines on the west docks, a stacked container maze on the east quay, and a tight roofed warehouse between them.
+- **Spire Plaza:** compact and fast, with a central tower splitting the plaza and two side alleys.
+
+`tools/map-check.js` validates a map: every spawn, post and route must be reachable, then bot rounds report any stuck bots.
+
+## Public play
+- **Public matches:** the Online tab lists open matches with their map and player count. **Create match** lists yours unless you untick the box.
+- **Quick Play:** joins the fullest open match, or opens a public one if there are none.
+- **The list has no server behind it:** the first browser to claim a fixed id holds the list and the others ask it; if it closes, another takes over within seconds. It is best-effort, and a malicious visitor could fake entries (they only ever lead to a normal join).
+- **Dedicated server:** `Host-Server.bat [ROOM] [map] [site url]` runs a headless Chrome or Edge that hosts matches with no player on it, so nobody in the match holds authority.
+  - It lists itself publicly, starts 30 s after the first player joins (at once when full), and reopens after each match or when everyone leaves.
+  - It needs an always-on machine; on a rented Windows server, run the same file there.
 
 ## Online
 Open the **Online** tab, enter a username and press **Create match**. Send the link to your friends; they enter a username and join. Pick squads in the lobby, then the host presses **Start match**. Bots fill empty slots, up to 5v5.
@@ -10,7 +26,7 @@ Open the **Online** tab, enter a username and press **Create match**. Send the l
 - **Late joining isn't supported:** a link stops accepting players once the match starts.
 - **Connecting:** the free public PeerJS service introduces the players, and PeerJS's free relay is the fallback for strict networks. Both are best-effort with no guarantee of uptime.
 - **Cheating:** the host's browser is the authority, so this suits friends rather than open public play.
-- **Code:** `src/netgame.js` (host, client, prediction, snapshots) and `src/lobby.js` (Online tab).
+- **Code:** `src/netgame.js` (host, client, prediction, snapshots), `src/lobby.js` (Online tab), `src/directory.js` (public list), `src/character.js` (player bodies and gun models).
 
 ## Menu (Esc)
 Tabs: **Play** (map, squad size, length, difficulty), **Aim trainer**, **Settings**, **Crosshair** and **Controls**. The last tab you opened is remembered.

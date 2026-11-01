@@ -16,11 +16,12 @@ import { AimTrainer } from './aimtrainer.js';
 import { initMenu, XH_DEFAULT, bestText } from './menu.js';
 import { HostSession, ClientSession, ClientMatch, cleanName } from './netgame.js';
 import { initLobby } from './lobby.js';
+import { Directory } from './directory.js';
 
 const DEG = Math.PI / 180;
 const FROZEN = { keys: new Set(), consume: () => false };
 const UP = new THREE.Vector3(0, 1, 0);
-const FX_NET = new Set(['tracer', 'decal', 'spark', 'debris']), SFX_NET = new Set(['shot', 'tone', 'burst', 'step', 'land']);
+const FX_NET = new Set(['tracer', 'decal', 'spark', 'debris']), SFX_NET = new Set(['shot', 'tone', 'burst', 'step', 'land', 'ricochet', 'explosion']);
 
 // --- settings (per-browser)
 const SETTINGS_KEY = 'neon-static.settings';
@@ -47,6 +48,7 @@ const isAim = !!world.aimlab;      // the aim lab runs drills
 const roomParam = (params.get('room') ?? '').toUpperCase();
 const room = isMatch && /^[A-Z0-9]{4,8}$/.test(roomParam) ? roomParam : null; // ?room=CODE: an online match
 let net = null; // the HostSession or ClientSession
+const dedicated = !!room && params.has('dedicated'); // a server page: runs the match, nobody plays on it, nothing is drawn
 let match = null; // assigned below; los() reads it for smoke
 
 const player = new Player(world);
@@ -232,6 +234,7 @@ bindSetting('vol', 'vol', pct, v => sfx.setLevel('master', v));
 bindSetting('volAmb', 'volAmb', pct, v => sfx.setLevel('ambient', v));
 bindSetting('volUi', 'volUi', pct, v => sfx.setLevel('ui', v));
 initMenu({ settings, save: saveSettings, sfx, onCrosshair: xh => hud.crosshairStyle(xh), startTab: isAim ? 'aim' : room ? 'online' : undefined });
+try { settings.lastTab = localStorage.getItem('neon-static.tab'); } catch { /* storage blocked */ }
 for (const id of ['teamSize', 'diff', 'length']) { // match settings restart the match
   const el = document.getElementById(id);
   el.value = settings[id];
@@ -241,17 +244,27 @@ document.getElementById('resetStats').addEventListener('click', resetStats);
 
 // --- online: lobby, then the host builds the match and each client mirrors it
 const lobby = initLobby({
-  settings, save: saveSettings, room, create: params.has('create'), sfx,
+  settings, save: saveSettings, room, create: params.has('create') || dedicated, mapId, isMatch, sfx,
   onEnter(name, isHost) {
     human.name = cleanName(name);
     const ui = {
-      lobby: (players, you, ready) => lobby.show(players, you, ready, isHost),
-      error: text => lobby.error(text),
+      lobby: (players, you, ready, auto) => lobby.show(players, you, ready, isHost, auto),
+      error(text) {
+        lobby.error(text);
+        if (dedicated) setTimeout(() => location.reload(), 5000); // e.g. our old room id hasn't been released yet
+      },
       hostLeft: () => { hud.banner('HOST LEFT', 'The match has ended. Reload to rejoin.', 0); lobby.error('The host left. Reload this page to rejoin if they start again.'); },
       start: isHost ? null : msg => startClient(msg),
     };
-    net = isHost ? new HostSession(room, name, ui) : new ClientSession(room, name, ui);
+    net = isHost ? new HostSession(room, dedicated ? 'Server' : name, ui, dedicated) : new ClientSession(room, name, ui);
     if (isHost) human.peer = 'host';
+    if (isHost && (dedicated || params.has('public'))) { // list this match publicly until it's over
+      const dir = new Directory(() => {});
+      const tell = () => dir.announce(net.listing(mapId));
+      tell();
+      setInterval(tell, 2000);
+    }
+    if (dedicated) runServer();
   },
   onStart: () => startHost(),
   onSwitch() {
@@ -261,19 +274,37 @@ const lobby = initLobby({
   },
 });
 
+// A dedicated page starts 30 s after the first player joins (at once when full), and reopens after each match.
+function runServer() {
+  let startAt = null, overAt = null;
+  setInterval(() => {
+    if (!match) {
+      const n = net.players.length;
+      startAt = n ? startAt ?? performance.now() + 30000 : null;
+      net.auto = startAt ? Math.max(0, Math.ceil((startAt - performance.now()) / 1000)) : null;
+      net.pushLobby();
+      if (n && (n >= 10 || net.auto === 0)) startHost();
+      return;
+    }
+    if (match.phase === 'over') overAt ??= performance.now();
+    if (!net.players.length || (overAt && performance.now() - overAt > 15000)) location.reload();
+  }, 1000);
+}
+
 function startHost() {
   if (net.started) return;
   human.name = net.me.name;
   human.team = net.me.team;
   const remotes = net.remotes(gfx.scene, world);
+  if (dedicated) human.alive = false;
   match = makeMatch({
-    humans: [human, ...remotes], online: true,
+    humans: dedicated ? remotes : [human, ...remotes], online: true,
     fx: net.proxy(fx, FX_NET, 'fx'), sfx: net.proxy(sfx, SFX_NET, 'sfx'),
     util: (...a) => net.sendUtil(...a),
   });
   net.begin(match);
   afterOnlineStart();
-  capturePointer(); // this click is the gesture pointer lock needs
+  if (!dedicated) capturePointer(); // this click is the gesture pointer lock needs
 }
 
 function startClient(msg) {
@@ -293,10 +324,10 @@ function afterOnlineStart() {
 const mapSelect = document.getElementById('map');
 for (const [id, m] of Object.entries(MAPS)) mapSelect.add(new Option(m.name, id, false, id === mapId));
 mapSelect.addEventListener('change', () => { location.search = `?map=${mapSelect.value}`; });
-document.getElementById('eyebrow').textContent = `${MAPS[mapId].name} · ${isMatch ? 'Match' : isAim ? 'Aim trainer' : 'Practice'} · Build 0.7`;
+document.getElementById('eyebrow').textContent = `${MAPS[mapId].name} · ${isMatch ? 'Match' : isAim ? 'Aim trainer' : 'Practice'} · Build 0.8`;
 document.body.classList.toggle('practice', !isMatch);
 document.body.classList.toggle('aimlab', isAim);
-if (room) document.getElementById('modeLede').textContent = `Online match, room ${room}. Set a username in the Online tab.`;
+if (room) document.getElementById('modeLede').textContent = `Online match on ${MAPS[mapId].name}, room ${room}. Set a username in the Online tab.`;
 else if (isAim) document.getElementById('modeLede').textContent = `${trainer.drill.name}: ${trainer.drill.desc} Press Deploy to start.`;
 else if (!isMatch) document.getElementById('modeLede').textContent = 'Test Range 07: static targets at 10–45 m, a strafe yard with peekers, and jump boxes. No match, no bots.';
 hud.initMinimap(world);
@@ -577,6 +608,7 @@ function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   advance();
+  if (dedicated) return; // a server draws nothing
   if (state === 'playing') for (const t of targets) t.update(dt);
   const running = simulating();
   const a = running ? acc / TICK : 1;

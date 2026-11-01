@@ -160,12 +160,22 @@
           <h2>Play online</h2>
           <label for="netName">Username</label>
           <input id="netName" type="text" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Letters and numbers, up to 16">
-          <button id="netGo" type="button">Create match</button>
+          <label class="check" id="netPublicRow"><input id="netPublic" type="checkbox" checked> List publicly so anyone can join</label>
+          <div class="presets">
+            <button id="netGo" type="button">Create match</button>
+          </div>
+          <p class="hint" id="netMapNote"></p>
           <p class="hint" id="netStatus" role="status">Create a match, then send the link to your friends. Your browser hosts it, so keep this tab open.</p>
           <div id="netRoomRow" hidden>
             <label for="netLink">Room <output id="netRoom"></output></label>
             <div class="coderow"><input id="netLink" type="text" readonly><button id="netCopy" type="button" class="ghost">Copy link</button></div>
           </div>
+        </div>
+        <div id="netBrowse">
+          <h2>Public matches</h2>
+          <button id="netQuick" type="button">QUICK PLAY</button>
+          <ul id="netRooms"></ul>
+          <p class="hint" id="netNoRooms">No public matches right now. Quick Play opens one, and the first people to look will find it.</p>
         </div>
         <div id="netLobby" hidden>
           <h2>Lobby</h2>

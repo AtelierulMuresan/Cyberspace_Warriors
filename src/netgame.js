@@ -24,7 +24,7 @@ const WKEYS = Object.keys(WEAPONS);
 const wIdx = def => WKEYS.findIndex(k => WEAPONS[k] === def);
 const UTIL_ORDER = ['emp', 'smoke', 'fire', 'decoy'];
 const FX_METHODS = new Set(['tracer', 'decal', 'spark', 'debris']);
-const SFX_METHODS = new Set(['shot', 'tone', 'burst', 'step', 'land']);
+const SFX_METHODS = new Set(['shot', 'tone', 'burst', 'step', 'land', 'ricochet', 'explosion']);
 const FEEDBACK = new Set(['banner', 'feed', 'hit', 'hurt', 'emp', 'whiz', 'shake', 'death', 'roundEnd', 'spawn', 'buyMsg']);
 const SLOTS = new Set(['primary', 'secondary', 'melee', 'utility']);
 const NO_SFX = { shot() {}, reload() {}, click() {}, step() {}, land() {}, swish() {} };
@@ -121,19 +121,21 @@ class RemoteHuman extends Human {
     a.group.position.lerpVectors(this.body.prevPos, this.body.pos, alpha);
     a.setGun(this.weapon.def);
     if (this.weapon.lastShot !== this.seenShot) { this.seenShot = this.weapon.lastShot; a.flashT = 0.05; }
-    a.pose(this.body.yaw, this.body.hSpeed, this.alive, this.body.crouching, dt);
+    a.pose(this.body.yaw, this.body.hSpeed, this.alive, this.body.crouching, dt, this.body.pitch, this.weapon.reloading);
   }
 }
 
 // ---------- host ----------
 export class HostSession {
   // ui: { lobby(players, meId), error(text) }
-  constructor(code, name, ui) {
+  // dedicated: this browser only runs the match; nobody plays on it
+  constructor(code, name, ui, dedicated = false) {
     this.code = code;
     this.ui = ui;
     this.id = 'host';
+    this.dedicated = dedicated;
     this.me = { id: 'host', name: cleanName(name), team: 0, host: true };
-    this.players = [this.me];
+    this.players = dedicated ? [] : [this.me];
     this.links = new Map();
     this.started = false;
     this.tickN = 0;
@@ -212,7 +214,7 @@ export class HostSession {
   pushLobby() {
     const players = this.players.map(({ name, team, host }) => ({ name, team, host: !!host }));
     this.ui.lobby(players, this.me.name, this.peer.open);
-    for (const l of this.links.values()) if (l.player && open(l.rel)) l.rel.send({ k: 'lobby', players, you: l.player.name });
+    for (const l of this.links.values()) if (l.player && open(l.rel)) l.rel.send({ k: 'lobby', players, you: l.player.name, auto: this.auto });
   }
 
   onClose(link) {
@@ -261,6 +263,11 @@ export class HostSession {
       l.pending = [];
     }
     for (const r of match.humans) if (r.isRemote) { r.avatar.isMate = r.team === match.human.team; if (r.avatar.isMate) r.avatar.setLabel(r.name); r.avatar.setSide(r.side); }
+  }
+
+  // what the public match list shows
+  listing(map) {
+    return { room: this.code, map, host: this.me.name, players: this.players.length, max: MAX_PER_SQUAD * 2, started: this.started, dedicated: this.dedicated };
   }
 
   sendUtil(...a) {
@@ -330,7 +337,7 @@ export class ClientSession {
 
   onRel(d) {
     if (!d || typeof d !== 'object') return;
-    if (d.k === 'lobby') this.ui.lobby(d.players, d.you, true);
+    if (d.k === 'lobby') this.ui.lobby(d.players, d.you, true, d.auto);
     else if (d.k === 'reject') { this.closing = true; this.ui.error(d.why); }
     else if (d.k === 'start') this.ui.start(d);
     else if (d.k === 'fb' && FEEDBACK.has(d.m)) this.feedback?.[d.m](...d.a);
@@ -403,7 +410,7 @@ class Ghost extends Avatar {
     }
     this.body.prevPos.copy(p);
     this.group.position.copy(p);
-    this.pose(this.aimYaw, this.body.hSpeed, this.alive, this.body.crouching, dt);
+    this.pose(this.aimYaw, this.body.hSpeed, this.alive, this.body.crouching, dt, this.aimPitch, this.weapon.reloading);
   }
 
   viewAngles() { return [this.aimYaw, this.aimPitch]; }

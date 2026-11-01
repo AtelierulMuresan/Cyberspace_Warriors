@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { Player } from './player.js';
 import { Weapon } from './weapon.js';
-import { toon, neon, outlinedBox, PALETTE } from './render.js';
+import { toon, neon, PALETTE } from './render.js';
+import { buildCharacter, buildGun } from './character.js';
 import { glowTex } from './fx.js';
 import { PARTS } from './targets.js';
 import { MOVE, WEAPONS, BOT } from './config.js';
@@ -38,60 +39,61 @@ export class Avatar {
   buildModel(scene) {
     const g = this.group = new THREE.Group();
     g.rotation.order = 'YXZ';
-    this.mat = toon(0xffffff);
-    this.headMat = toon(0xffffff);
+    // the hit boxes stay simple and still, so aiming doesn't depend on the walk animation
     this.parts = [];
-    this.legs = [];
+    const hitMat = new THREE.MeshBasicMaterial();
     for (const [w, h, d, px, py, pz, zone] of PARTS) {
-      const m = outlinedBox(w, h, d, zone === 'head' ? this.headMat : this.mat, 0.018);
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), hitMat);
+      m.visible = false;
+      m.position.set(px, py, pz);
       m.userData.dummy = this;
       m.userData.part = zone;
+      g.add(m);
       this.parts.push(m);
-      if (zone === 'legs') { // pivot at the hip so legs can swing
-        const hip = new THREE.Group();
-        hip.position.set(px, 0.86, pz);
-        m.position.set(0, py - 0.86, 0);
-        hip.add(m);
-        g.add(hip);
-        this.legs.push(hip);
-      } else {
-        m.position.set(px, py, pz);
-        g.add(m);
-      }
     }
+    this.mat = toon(0xffffff);
+    this.headMat = toon(0xffffff);
     this.visorMat = neon(0xffffff, 2);
     this.stripMat = neon(0xffffff, 2);
-    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.05, 0.02), this.visorMat);
-    visor.position.set(0, 1.66, 0.135);
-    const strip = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.03, 0.02), this.stripMat);
-    strip.position.set(0, 1.32, 0.145);
-    this.gunMesh = outlinedBox(0.07, 0.09, 0.55, toon(0x2a2638), 0.012);
-    this.gunMesh.position.set(0.16, 1.28, 0.32);
+    this.rig = buildCharacter({ body: this.mat, head: this.headMat, dark: toon(0x2b2840), visor: this.visorMat, strip: this.stripMat });
+    g.add(this.rig.root);
     this.muzzleFlash = new THREE.Sprite(new THREE.SpriteMaterial({
       map: glowTex, color: new THREE.Color(0xffc070).multiplyScalar(3),
       blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
     }));
-    this.muzzleFlash.position.set(0.16, 1.3, 0.64);
     this.muzzleFlash.scale.setScalar(0.4);
     this.muzzleFlash.visible = false;
+    this.rig.gunMount.add(this.muzzleFlash);
     // teammate marker: floating diamond, only shown on the player's squad
     this.marker = new THREE.Mesh(new THREE.OctahedronGeometry(0.06), neon(PALETTE.cyan, 1.2));
     this.marker.position.set(0, 2.15, 0);
     this.marker.visible = false;
-    g.add(visor, strip, this.gunMesh, this.muzzleFlash, this.marker);
+    g.add(this.marker);
+    this.setGun(WEAPONS.vox9);
     scene.add(g);
   }
 
   setSide(side) {
     this.side = side;
-    const l = LOOK[side];
+    const l = LOOK[side], r = this.rig, ghost = side === 'attack';
     this.mat.color.set(l.body);
     this.headMat.color.set(l.head);
-    this.visorMat.color.set(l.visor).multiplyScalar(2);
+    this.visorMat.color.set(l.visor).multiplyScalar(1.15); // bright enough to read, not enough to hide the head
     this.stripMat.color.set(l.strip).multiplyScalar(2);
+    // Ghostwire: hood and coat. Helix: helmet and shoulder armour.
+    r.hood.visible = r.coat.visible = ghost;
+    r.helmet.visible = !ghost;
+    for (const p of r.pads) p.visible = !ghost;
   }
 
-  setGun(def) { this.gunMesh.scale.z = { pistol: 0.5, smg: 0.7, shotgun: 1.05, marksman: 1.3 }[def.model] ?? 1; }
+  setGun(def) {
+    if (this.gunModel === def.model) return;
+    this.gunModel = def.model;
+    this.gun?.removeFromParent();
+    this.gun = buildGun(def.model);
+    this.rig.gunMount.add(this.gun);
+    this.muzzleFlash.position.set(0, 0.04, this.gun.userData.muzzleZ);
+  }
 
   // teammates get their name over their head
   setLabel(name) {
@@ -108,21 +110,35 @@ export class Avatar {
   }
 
   // set group.position first
-  pose(yaw, speed, alive, crouching, dt) {
-    const g = this.group;
+  pose(yaw, speed, alive, crouching, dt, pitch = 0, reloading = false) {
+    const g = this.group, r = this.rig;
     g.rotation.y = yaw + Math.PI; // model faces +Z
     g.rotation.x = alive ? 0 : Math.max(-Math.PI / 2, g.rotation.x - dt * 7);
-    g.scale.y = crouching ? 0.72 : 1;
-    const sp = alive ? speed : 0;
-    this.walkT += dt * sp * 2.2;
-    const swing = Math.sin(this.walkT) * 0.5 * Math.min(1, sp / MOVE.runSpeed);
-    this.legs[0].rotation.x = swing;
-    this.legs[1].rotation.x = -swing;
+    const sp = alive ? speed : 0, f = Math.min(1, sp / MOVE.runSpeed);
+    this.walkT += dt * sp * 1.7;
+    const s = Math.sin(this.walkT), c = Math.cos(this.walkT);
+    // crouch eases in: hips drop and knees fold
+    this.crouchT = (this.crouchT ?? 0) + ((crouching ? 1 : 0) - (this.crouchT ?? 0)) * Math.min(1, dt * 12);
+    const k = this.crouchT;
+    r.hips.position.y = 0.92 - k * 0.3 + Math.abs(c) * 0.025 * f;
+    r.L.hip.rotation.x = -k * 1.05 - s * 0.75 * f;
+    r.R.hip.rotation.x = -k * 1.05 + s * 0.75 * f;
+    r.L.knee.rotation.x = k * 1.5 + Math.max(0, -c) * 1.1 * f;
+    r.R.knee.rotation.x = k * 1.5 + Math.max(0, c) * 1.1 * f;
+    // the upper body follows the aim; firing kicks it back; reloading drops the support arm
+    this.flashT -= dt;
+    const firing = this.flashT > 0;
+    r.spine.rotation.x = -pitch * 0.6 + k * 0.25 + f * 0.1 - (firing ? 0.05 : 0);
+    r.spine.rotation.y = s * 0.08 * f;
+    r.head.rotation.x = -pitch * 0.4 - k * 0.25 - f * 0.1;
+    r.armR.shoulder.rotation.set(-0.55, 0, -0.1);
+    r.armR.elbow.rotation.x = -1.45;
+    r.armL.shoulder.rotation.set(reloading ? -0.5 : -1.2, 0, 0.62);
+    r.armL.elbow.rotation.x = reloading ? -1.3 : -0.4;
     this.flash = Math.max(0, this.flash - dt * 6);
     this.mat.emissive.setScalar(this.flash * 0.8);
     this.headMat.emissive.setScalar(this.flash * 0.8);
-    this.flashT -= dt;
-    this.muzzleFlash.visible = this.flashT > 0;
+    this.muzzleFlash.visible = firing;
     this.marker.visible = alive && this.isMate;
     if (this.label) this.label.visible = alive && this.isMate;
     g.visible = !this.spectated; // the spectator camera sits inside this head
@@ -617,7 +633,7 @@ export class Bot extends Avatar {
 
   render(alpha, dt) {
     this.group.position.lerpVectors(this.body.prevPos, this.body.pos, alpha);
-    this.pose(this.aimYaw, this.body.hSpeed, this.alive, false, dt);
+    this.pose(this.aimYaw, this.body.hSpeed, this.alive, false, dt, this.aimPitch, this.weapon.reloading);
   }
 
   // interpolated view for the spectator camera

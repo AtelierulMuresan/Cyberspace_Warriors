@@ -129,15 +129,25 @@ export class Sfx {
     o.stop(t + dur + 0.02);
   }
 
-  // each weapon model gets its own report: [noise length, crack Hz, thump Hz, volume]
+  // a shot has three layers: a sharp mechanical click, the body of the blast, and a low thump with a tail
+  // each model: [body length, crack Hz, thump Hz, volume, click Hz]
   shot(at = null, model = 'rifle') {
-    const [len, crack, thump, vol] = {
-      pistol: [0.12, 5000, 200, 0.4], smg: [0.1, 7000, 190, 0.38], shotgun: [0.32, 3500, 90, 0.7],
-      marksman: [0.45, 9000, 70, 0.75], rifle: [0.16, 6000, 160, 0.5],
-    }[model] ?? [0.16, 6000, 160, 0.5];
+    const [len, crack, thump, vol, click] = {
+      pistol: [0.12, 5000, 200, 0.4, 3200], smg: [0.09, 7000, 190, 0.36, 4200], shotgun: [0.36, 3200, 80, 0.72, 1500],
+      marksman: [0.5, 9000, 62, 0.78, 2400], rifle: [0.17, 6000, 150, 0.5, 2800],
+    }[model] ?? [0.17, 6000, 150, 0.5, 2800];
     const muffle = at ? 0.3 + 0.7 * at.gain : 1; // distant shots lose their crack
+    this.tone(click * muffle, 0.018, 'square', vol * 0.35, 0, click * 0.5 * muffle, at);
     this.burst(len, crack * muffle, 600, vol, 0, at);
-    this.tone(thump, len * 0.8, 'triangle', vol * 1.2, 0, 40, at);
+    this.tone(thump, len * 0.9, 'triangle', vol * 1.2, 0, 38, at);
+    if (model === 'shotgun' || model === 'marksman') this.burst(0.5, 900, 150, vol * 0.3, 0.05, at); // heavy guns roll on
+    if (!at && model === 'shotgun') { this.tone(500, 0.04, 'square', 0.1, 0.32); this.tone(330, 0.05, 'square', 0.12, 0.46); } // pump
+    if (!at && model === 'marksman') { this.tone(620, 0.04, 'square', 0.1, 0.5); this.tone(420, 0.05, 'square', 0.12, 0.85); } // bolt
+  }
+  // a round striking metal or concrete nearby
+  ricochet(at = null) {
+    this.tone(2600 + Math.random() * 1800, 0.09, 'triangle', 0.07, 0, 900 + Math.random() * 500, at);
+    this.burst(0.05, 5000, 1500, 0.08, 0, at);
   }
   // a bullet passing close by: a fast band-passed zip
   whiz(pan) { this.burst(0.13, 4200, 900, 0.22, 0, { gain: 1, pan }, null, 'bandpass'); }
@@ -148,14 +158,24 @@ export class Sfx {
   kill() { this.tone(220, 0.18, 'sawtooth', 0.12, 0, 110); this.tone(1200, 0.15, 'sine', 0.15, 0.03); }
   hurt() { this.tone(120, 0.16, 'square', 0.18, 0, 70); }
   click() { this.tone(900, 0.02, 'square', 0.08); }
-  reload() {
-    this.tone(700, 0.03, 'square', 0.1, 0.5);
-    this.tone(500, 0.04, 'square', 0.12, 1.2);
-    this.tone(1100, 0.03, 'square', 0.1, 2.1);
+  // mag out, mag in, then the slide or bolt, spaced across the weapon's reload time
+  reload(time = 2.4) {
+    this.tone(700, 0.03, 'square', 0.1, time * 0.2);
+    this.burst(0.05, 2400, 800, 0.08, time * 0.21);
+    this.tone(500, 0.04, 'square', 0.12, time * 0.55);
+    this.burst(0.05, 1800, 500, 0.1, time * 0.56);
+    this.tone(1100, 0.03, 'square', 0.1, time * 0.86);
+    this.tone(760, 0.04, 'square', 0.1, time * 0.92);
   }
   equip() { this.tone(600, 0.03, 'square', 0.07); this.tone(900, 0.03, 'square', 0.06, 0.08); }
-  step(at = null) { this.burst(0.07, 420, 120, 0.18, 0, at); }
-  land(at = null) { this.burst(0.12, 500, 90, 0.35, 0, at); }
+  // wet street: a soft thud with a small splash on top
+  step(at = null) { this.burst(0.07, 380 + Math.random() * 120, 110, 0.18, 0, at); this.burst(0.05, 3200, 1400, 0.025, 0.01, at); }
+  land(at = null) { this.burst(0.12, 500, 90, 0.35, 0, at); this.burst(0.09, 3000, 1000, 0.05, 0.01, at); }
+  explosion() { // the spike
+    this.burst(1.6, 2600, 50, 0.9);
+    this.tone(62, 1.5, 'sawtooth', 0.45, 0, 26);
+    this.burst(2.4, 700, 80, 0.3, 0.2);
+  }
 
   // interface sounds go to the ui bus
   uiClick() { this.tone(1300, 0.025, 'square', 0.05, 0, 1300, null, this.ui); }

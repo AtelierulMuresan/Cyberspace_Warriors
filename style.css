@@ -279,3 +279,11 @@ kbd { font: 12px var(--mono); border: 1px solid var(--line); border-bottom-width
 .squads h3 { margin: 0 0 6px; font-size: 12px; color: var(--dim); letter-spacing: 0.08em; font-weight: 500; }
 .squads ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; min-height: 40px; font-size: 14px; }
 .squads li.me { color: var(--amber); }
+
+/* ---------- public match list ---------- */
+#netQuick { font-size: 14px; padding: 10px 24px; margin-bottom: 12px; }
+#netRooms { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 6px; max-height: 190px; overflow-y: auto; }
+#netRooms li { display: flex; gap: 10px; justify-content: space-between; align-items: center; font-size: 13px; }
+#netRooms li span { min-width: 0; overflow-wrap: anywhere; }
+#netRooms button { margin: 0; padding: 5px 10px; flex: none; }
+#netRooms button:disabled { opacity: 0.5; cursor: default; }

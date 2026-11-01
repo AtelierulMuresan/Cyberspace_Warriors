@@ -93,7 +93,7 @@ export class Weapon {
     this.reloadStart = now;
     this.reloadEnd = now + this.def.reloadTime;
     this.adsT = 0;
-    sfx.reload();
+    sfx.reload(this.def.reloadTime);
   }
 
   // Runs at the fixed sim rate. Returns the shot (angles, pellets, melee or throw), or null.
@@ -197,10 +197,24 @@ export class Weapon {
       part(0.04, 0.004, 0.004, 0, y + 0.022, z, accent);
       sightDot(0, y, z);
     };
-    const hands = (front, back) => {
-      if (front) part(0.085, 0.06, 0.11, 0, front[0], front[1], glove);
-      if (back) part(0.08, 0.07, 0.09, 0, back[0], back[1], glove);
+    const sleeve = toon(0x241f33);
+    const hands = (front, back) => { // gloves, with forearms running back out of frame
+      if (front) {
+        part(0.085, 0.06, 0.11, 0, front[0], front[1], glove);
+        const arm = outlinedBox(0.07, 0.07, 0.5, sleeve, 0.006);
+        arm.position.set(-0.13, front[0] - 0.13, front[1] + 0.22);
+        arm.rotation.set(0.42, -0.5, 0);
+        g.add(arm);
+      }
+      if (back) {
+        part(0.08, 0.07, 0.09, 0, back[0], back[1], glove);
+        const arm = outlinedBox(0.08, 0.08, 0.45, sleeve, 0.006);
+        arm.position.set(0.05, back[0] - 0.13, back[1] + 0.2);
+        arm.rotation.set(0.62, 0.15, 0);
+        g.add(arm);
+      }
     };
+    const vents = (n, w, y, z, step) => { for (let i = 0; i < n; i++) part(w, 0.008, 0.012, 0, y, z - i * step, body); };
 
     let muzzleZ = -0.5, flashSize = 0.2;
     switch (this.def.model) {
@@ -208,8 +222,10 @@ export class Weapon {
         part(0.045, 0.05, 0.2, 0, 0, -0.02, body);
         part(0.04, 0.035, 0.17, 0, -0.035, -0.01, accent);
         part(0.038, 0.1, 0.05, 0, -0.08, 0.06, body, -0.25);
-        part(0.07, 0.07, 0.09, 0, -0.1, 0.08, glove);
-        glow(0.047, 0.006, 0.1, 0, 0.026, -0.04, PALETTE.cyan, 0.5);
+        glow(0.012, 0.004, 0.1, 0, 0.026, -0.04, PALETTE.cyan, 0.8);
+        part(0.03, 0.012, 0.02, 0, 0.03, 0.06, accent);          // rear sight
+        part(0.03, 0.022, 0.035, 0, -0.005, -0.125, accent);     // compensator
+        hands(null, [-0.1, 0.08]);
         sightDot(0, 0.031, -0.11);
         muzzleZ = -0.14; flashSize = 0.14;
         break;
@@ -220,6 +236,8 @@ export class Weapon {
         part(0.04, 0.09, 0.05, 0, -0.08, 0.1, body, -0.3);
         part(0.05, 0.05, 0.14, 0, 0, 0.21, accent);            // folding stock
         glow(0.062, 0.004, 0.1, 0, 0.041, 0.02, PALETTE.cyan, 0.5);
+        vents(4, 0.058, 0.041, -0.09, 0.024);
+        part(0.04, 0.04, 0.05, 0, 0.012, -0.29, accent);         // suppressor collar
         holoSight(0.066, -0.06);
         hands([-0.05, -0.12], [-0.09, 0.12]);
         muzzleZ = -0.3; flashSize = 0.16;
@@ -232,6 +250,7 @@ export class Weapon {
         part(0.06, 0.11, 0.2, 0, -0.03, 0.27, body);            // stock
         part(0.04, 0.1, 0.05, 0, -0.09, 0.13, body, -0.3);
         glow(0.072, 0.006, 0.2, 0, 0.046, -0.02, PALETTE.amber);
+        for (let i = 0; i < 3; i++) part(0.022, 0.018, 0.04, 0.042, 0.005, 0.08 + i * 0.05, toon(0xb0344a)); // shell holder
         sightDot(0, 0.06, -0.48);
         hands([-0.06, -0.24], [-0.1, 0.15]);
         muzzleZ = -0.53; flashSize = 0.3;
@@ -245,9 +264,11 @@ export class Weapon {
         part(0.045, 0.045, 0.26, 0, 0.1, -0.04, accent);        // scope tube
         part(0.06, 0.06, 0.04, 0, 0.1, -0.18, accent);
         part(0.056, 0.056, 0.04, 0, 0.1, 0.1, accent);
+        part(0.05, 0.05, 0.07, 0, 0.012, -0.64, accent);         // muzzle brake
+        part(0.012, 0.03, 0.05, 0.045, 0.02, 0.1, accent);       // bolt handle
         glow(0.046, 0.046, 0.005, 0, 0.1, -0.2, PALETTE.cyan, 1.6); // lens glint
         hands([-0.055, -0.22], [-0.1, 0.16]);
-        muzzleZ = -0.64; flashSize = 0.26;
+        muzzleZ = -0.7; flashSize = 0.26;
         break;
       case 'knife':
         part(0.03, 0.035, 0.11, 0, 0, 0.04, body);              // handle
@@ -273,6 +294,9 @@ export class Weapon {
         holoSight(0.077, -0.05);
         hands([-0.055, -0.2], [-0.1, 0.15]);
         glow(0.074, 0.006, 0.14, 0, 0.025, -0.2);
+        vents(5, 0.07, 0.03, -0.14, 0.024);
+        part(0.04, 0.04, 0.05, 0, 0.015, -0.51, accent);         // muzzle brake
+        part(0.012, 0.03, 0.05, 0.042, 0.02, -0.02, accent);     // charging handle
         muzzleZ = -0.53;
     }
     const pose = VM_POSE[this.def.model] ?? VM_POSE.rifle;

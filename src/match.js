@@ -3,6 +3,7 @@ import { ROUND, ECON, MATCH_LENGTH, WEAPONS, BOT, BOT_SKILL, SHOP, MOVE, UTIL, U
 import { Bot } from './bots.js';
 import { Utilities } from './utility.js';
 import { neon, toon, outlinedBox, PALETTE } from './render.js';
+import { buildGun } from './character.js';
 
 export const SQUAD_NAMES = [['VEX', 'RIN', 'KADE', 'ONO', 'TAO'], ['NULL', 'HEX', 'SABLE', 'DRAX', 'MIRA']];
 const PRICES = Object.fromEntries(SHOP.map(i => [i.id, i.price]));
@@ -30,11 +31,7 @@ export function buildSpikeMesh(scene) {
 
 // a primary lying on the ground
 export function dropMesh(scene, def, x, y, z, ry) {
-  const len = { smg: 0.55, shotgun: 0.85, marksman: 1.0 }[def.model] ?? 0.8;
-  const mesh = outlinedBox(0.08, 0.1, len, toon(0x3d3752), 0.012);
-  const glow = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.012, len * 0.5), neon(PALETTE.amber, 1.6));
-  glow.position.y = 0.05;
-  mesh.add(glow);
+  const mesh = buildGun(def.model);
   mesh.position.set(x, y, z);
   mesh.rotation.set(0, ry, Math.PI / 2);
   scene.add(mesh);
@@ -318,8 +315,7 @@ export class Match {
     this.spikeMesh.visible = false;
     this.fx.spark(tmp.set(sp.pos.x, 1.5, sp.pos.z), 0xff6ad5, 30);
     this.shakeAll(sp.pos, 2.5);
-    this.sfx.burst(1.4, 2500, 60, 0.9);
-    this.sfx.tone(60, 1.2, 'sawtooth', 0.4, 0, 30);
+    this.sfx.explosion();
     for (const c of this.combatants) if (c.alive && flat(c.pos, sp.pos) < ROUND.blastRadius) this.kill(null, c, false, null);
     this.endRound(this.teamOn('attack'), 'spike');
   }
@@ -381,6 +377,7 @@ export class Match {
         normal.copy(wall.face.normal).transformDirection(wall.object.matrixWorld);
         this.fx.decal(wall.point, normal);
         this.fx.spark(wall.point, 0xffd08a, 0.18);
+        if (i < 2) this.sfx.ricochet(this.spatial(wall.point, 30));
         if (i < 3) this.fx.debris(wall.point, normal, 0x8a7aa8, 4);
       }
       // a bullet that passes close to a player's head without hitting: whizz
