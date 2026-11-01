@@ -14,10 +14,13 @@ import { NavGrid } from './navgrid.js';
 import { Match } from './match.js';
 import { AimTrainer } from './aimtrainer.js';
 import { initMenu, XH_DEFAULT, bestText } from './menu.js';
+import { HostSession, ClientSession, ClientMatch, cleanName } from './netgame.js';
+import { initLobby } from './lobby.js';
 
 const DEG = Math.PI / 180;
 const FROZEN = { keys: new Set(), consume: () => false };
 const UP = new THREE.Vector3(0, 1, 0);
+const FX_NET = new Set(['tracer', 'decal', 'spark', 'debris']), SFX_NET = new Set(['shot', 'tone', 'burst', 'step', 'land']);
 
 // --- settings (per-browser)
 const SETTINGS_KEY = 'neon-static.settings';
@@ -41,6 +44,9 @@ const world = MAPS[mapId].build(gfx.scene);
 gfx.scene.updateMatrixWorld(true); // static geometry: raycasts must not wait for the first render
 const isMatch = !!world.spawns;    // maps with spawns run a 5v5 match; others are practice ranges
 const isAim = !!world.aimlab;      // the aim lab runs drills
+const roomParam = (params.get('room') ?? '').toUpperCase();
+const room = isMatch && /^[A-Z0-9]{4,8}$/.test(roomParam) ? roomParam : null; // ?room=CODE: an online match
+let net = null; // the HostSession or ClientSession
 let match = null; // assigned below; los() reads it for smoke
 
 const player = new Player(world);
@@ -68,22 +74,22 @@ function los(a, b) {
   return losRay.intersectObjects(world.meshes, false).length === 0;
 }
 
-function spatial(pos, range) {
+// `from` marks whose sound it is, so that player doesn't hear their own gun twice online
+function spatial(pos, range, from) {
   const c = gfx.camera.position, dx = pos.x - c.x, dz = pos.z - c.z, d = Math.hypot(dx, dz);
   const gain = Math.max(0, 1 - d / range) ** 1.5;
   const yaw = gfx.camera.rotation.y;
   const pan = d > 0.1 ? THREE.MathUtils.clamp((dx * Math.cos(yaw) - dz * Math.sin(yaw)) / d, -1, 1) * 0.8 : 0;
-  return { gain, pan };
+  return room ? { gain, pan, range, from, pos: { x: pos.x, y: pos.y, z: pos.z } } : { gain, pan };
 }
 
-const muzzle = new THREE.Vector3();
-function humanMuzzle() { // tracer start: at the gun, not the eye
-  const y = player.yaw;
-  return muzzle.set(
-    player.pos.x + Math.cos(y) * 0.16 - Math.sin(y) * 0.6,
-    player.pos.y + player.eye - 0.12,
-    player.pos.z - Math.sin(y) * 0.16 - Math.cos(y) * 0.6,
-  ).clone();
+function humanMuzzle(h = human) { // tracer start: at the gun, not the eye
+  const b = h.body, y = b.yaw;
+  return new THREE.Vector3(
+    b.pos.x + Math.cos(y) * 0.16 - Math.sin(y) * 0.6,
+    b.pos.y + b.eye - 0.12,
+    b.pos.z - Math.sin(y) * 0.16 - Math.cos(y) * 0.6,
+  );
 }
 
 function angleTo(pos) { // screen angle to a world point: 0 = ahead, clockwise positive
@@ -115,41 +121,60 @@ function shakeFrom(pos, intensity) {
   shake = Math.max(shake, intensity * Math.max(0, 1 - player.pos.distanceTo(pos) / 25));
 }
 
+// What one player is told about the match. Online, the host sends these calls to each client,
+// where they run on this same object; the method names are listed in netgame.js.
+const feedback = {
+  banner: (t, sub, sec) => hud.banner(t, sub, sec),
+  feed: (entry, cls) => hud.feed(entry, cls),
+  hit(dmg, head, killed, point, helmet, dot) {
+    if (dot) { // burning: no hit markers unless it finishes them
+      if (killed) { stats.kills++; hud.hitmarker('kill'); }
+    } else {
+      helmetHit = helmet;
+      hitFeedback(dmg, head, killed, point, 0, '');
+    }
+    hud.stats(stats);
+  },
+  hurt(from, jolt) {
+    sfx.hurt();
+    hud.hurt(angleTo(from));
+    if (jolt) shake = Math.max(shake, 0.25);
+  },
+  emp(dur) { empUntil = Math.max(empUntil, simTime + dur); sfx.tone(3200, dur * 0.6, 'sine', 0.12, 0, 3000); },
+  whiz(near) { sfx.whiz(Math.sin(angleTo(near))); },
+  shake: shakeFrom,
+  death(text, report) {
+    stats.deaths++;
+    hud.stats(stats);
+    deathAt = performance.now();
+    hud.death(text, report);
+  },
+  roundEnd(won) {
+    const notes = won ? [523, 659, 784] : [392, 330, 262];
+    notes.forEach((f, i) => sfx.tone(f, 0.22, 'triangle', 0.18, i * 0.14));
+  },
+  spawn(x, z, yaw) {
+    player.spawnAt(tmp.set(x, 0, z), yaw);
+    if (match?.isClient) { match.history = []; human.alive = true; }
+  },
+  buyMsg(m) {
+    buyMsg = m;
+    m.startsWith('Bought') ? sfx.uiOk() : sfx.uiNo();
+  },
+};
+
+function makeMatch(extra = {}) {
+  return new Match({
+    scene: gfx.scene, world, nav: new NavGrid(world), human, sfx, fx, spatial, los, humanMuzzle, settings,
+    hooks: { to: c => (c === human ? feedback : c.fb), util: extra.util },
+    ...extra,
+  });
+}
+
 // --- mode setup
 let targets = [], practiceHittables = [], trainer = null;
 if (isMatch) {
-  match = new Match({
-    scene: gfx.scene, world, nav: new NavGrid(world), human, sfx, fx, spatial, los, humanMuzzle, settings,
-    hooks: {
-      banner: (t, s, sec) => hud.banner(t, s, sec),
-      feed: (t, cls) => hud.feed(t, cls),
-      hit(attacker, victim, dmg, zone, point, killed, def) {
-        if (def?.dot) { // burning: no hit markers, just the hurt cue
-          if (victim.isHuman) { sfx.hurt(); hud.hurt(angleTo(attacker.pos)); }
-          if (attacker?.isHuman && killed) { stats.kills++; hud.hitmarker('kill'); }
-          return;
-        }
-        fx.spark(point, zone === 'head' ? 0x38e8ff : 0xff3fb4, zone === 'head' ? 0.45 : 0.3);
-        fx.debris(point, UP, zone === 'head' ? 0x38e8ff : 0xff3fb4, 4);
-        helmetHit = zone === 'head' && victim.helmet;
-        if (attacker?.isHuman) hitFeedback(dmg, zone === 'head', killed, point, 0, victim.name);
-        if (victim.isHuman) { sfx.hurt(); hud.hurt(angleTo(attacker.pos)); shake = Math.max(shake, 0.25); }
-      },
-      emp(dur) { empUntil = Math.max(empUntil, simTime + dur); sfx.tone(3200, dur * 0.6, 'sine', 0.12, 0, 3000); },
-      whiz(near) { sfx.whiz(Math.sin(angleTo(near))); },
-      shake: shakeFrom,
-      kill(attacker, victim) {
-        if (!victim.isHuman) return;
-        stats.deaths++;
-        deathAt = performance.now();
-        hud.death(`ELIMINATED BY ${attacker ? attacker.name : 'THE SPIKE'}`, match.report(human));
-      },
-      roundEnd(won) {
-        const notes = won ? [523, 659, 784] : [392, 330, 262];
-        notes.forEach((f, i) => sfx.tone(f, 0.22, 'triangle', 0.18, i * 0.14));
-      },
-    },
-  });
+  if (!room) match = makeMatch();
 } else if (isAim) {
   human.give(WEAPONS.lancer, 0);
   trainer = new AimTrainer(gfx.scene, params.get('drill'), {
@@ -165,12 +190,17 @@ if (isMatch) {
   practiceHittables = [...world.meshes, ...targets.flatMap(t => t.parts)];
   human.give(WEAPONS.lancer, 0);
 }
-window.neonStatic = { player, human, world, match, targets, trainer, stats, input, tick: () => tick() }; // debugging handle
+window.neonStatic = { player, human, world, get match() { return match; }, get net() { return net; }, targets, trainer, stats, input, tick: () => tick() }; // debugging handle
 
 const playerSfx = {
-  step() { sfx.step(); match?.noise(player.pos, human.team, BOT.hearStep); },
-  land() { sfx.land(); match?.noise(player.pos, human.team, BOT.hearStep); },
+  step() { sfx.step(); footfall('step'); },
+  land() { sfx.land(); footfall('land'); },
 };
+
+function footfall(kind) { // bots hear it; online, other players do too
+  match?.noise(player.pos, human.team, BOT.hearStep);
+  if (net?.match && !match.isClient) match.sfx[kind](spatial(player.pos, 22, 'host'));
+}
 
 // --- settings UI
 function bindSetting(id, key, fmt, apply) {
@@ -201,7 +231,7 @@ bindSetting('showSpeed', 'showSpeed', v => v, v => document.body.classList.toggl
 bindSetting('vol', 'vol', pct, v => sfx.setLevel('master', v));
 bindSetting('volAmb', 'volAmb', pct, v => sfx.setLevel('ambient', v));
 bindSetting('volUi', 'volUi', pct, v => sfx.setLevel('ui', v));
-initMenu({ settings, save: saveSettings, sfx, onCrosshair: xh => hud.crosshairStyle(xh), startTab: isAim ? 'aim' : undefined });
+initMenu({ settings, save: saveSettings, sfx, onCrosshair: xh => hud.crosshairStyle(xh), startTab: isAim ? 'aim' : room ? 'online' : undefined });
 for (const id of ['teamSize', 'diff', 'length']) { // match settings restart the match
   const el = document.getElementById(id);
   el.value = settings[id];
@@ -209,15 +239,68 @@ for (const id of ['teamSize', 'diff', 'length']) { // match settings restart the
 }
 document.getElementById('resetStats').addEventListener('click', resetStats);
 
+// --- online: lobby, then the host builds the match and each client mirrors it
+const lobby = initLobby({
+  settings, save: saveSettings, room, create: params.has('create'), sfx,
+  onEnter(name, isHost) {
+    human.name = cleanName(name);
+    const ui = {
+      lobby: (players, you, ready) => lobby.show(players, you, ready, isHost),
+      error: text => lobby.error(text),
+      hostLeft: () => { hud.banner('HOST LEFT', 'The match has ended. Reload to rejoin.', 0); lobby.error('The host left. Reload this page to rejoin if they start again.'); },
+      start: isHost ? null : msg => startClient(msg),
+    };
+    net = isHost ? new HostSession(room, name, ui) : new ClientSession(room, name, ui);
+    if (isHost) human.peer = 'host';
+  },
+  onStart: () => startHost(),
+  onSwitch() {
+    const team = 1 - lobby.team;
+    if (net instanceof HostSession) net.setTeam(net.me, team);
+    else net?.setTeam(team);
+  },
+});
+
+function startHost() {
+  if (net.started) return;
+  human.name = net.me.name;
+  human.team = net.me.team;
+  const remotes = net.remotes(gfx.scene, world);
+  match = makeMatch({
+    humans: [human, ...remotes], online: true,
+    fx: net.proxy(fx, FX_NET, 'fx'), sfx: net.proxy(sfx, SFX_NET, 'sfx'),
+    util: (...a) => net.sendUtil(...a),
+  });
+  net.begin(match);
+  afterOnlineStart();
+  capturePointer(); // this click is the gesture pointer lock needs
+}
+
+function startClient(msg) {
+  match = new ClientMatch({ scene: gfx.scene, world, human, player, session: net, msg });
+  Object.assign(net, { match, feedback, fx, sfx, spatial });
+  afterOnlineStart();
+}
+
+function afterOnlineStart() {
+  document.getElementById('deploy').hidden = false;
+  lobby.started();
+  // a covered or hidden tab stops animation frames, but the match must not stop with it (a host's alt-tab would freeze everyone)
+  const beat = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 16)'], { type: 'text/javascript' })));
+  beat.onmessage = advance;
+}
+
 const mapSelect = document.getElementById('map');
 for (const [id, m] of Object.entries(MAPS)) mapSelect.add(new Option(m.name, id, false, id === mapId));
 mapSelect.addEventListener('change', () => { location.search = `?map=${mapSelect.value}`; });
-document.getElementById('eyebrow').textContent = `${MAPS[mapId].name} · ${isMatch ? 'Match' : isAim ? 'Aim trainer' : 'Practice'} · Build 0.6`;
+document.getElementById('eyebrow').textContent = `${MAPS[mapId].name} · ${isMatch ? 'Match' : isAim ? 'Aim trainer' : 'Practice'} · Build 0.7`;
 document.body.classList.toggle('practice', !isMatch);
 document.body.classList.toggle('aimlab', isAim);
-if (isAim) document.getElementById('modeLede').textContent = `${trainer.drill.name}: ${trainer.drill.desc} Press Deploy to start.`;
+if (room) document.getElementById('modeLede').textContent = `Online match, room ${room}. Set a username in the Online tab.`;
+else if (isAim) document.getElementById('modeLede').textContent = `${trainer.drill.name}: ${trainer.drill.desc} Press Deploy to start.`;
 else if (!isMatch) document.getElementById('modeLede').textContent = 'Test Range 07: static targets at 10–45 m, a strafe yard with peekers, and jump boxes. No match, no bots.';
 hud.initMinimap(world);
+document.getElementById('deploy').hidden = !!room; // online: only once the match starts
 
 function resetStats() {
   Object.assign(stats, { shots: 0, hits: 0, heads: 0, kills: 0, deaths: 0 });
@@ -231,12 +314,13 @@ const deploy = document.getElementById('deploy');
 const note = document.getElementById('note');
 let state = 'menu', acc = 0;
 
-deploy.addEventListener('click', () => {
+deploy.addEventListener('click', capturePointer);
+function capturePointer() {
   sfx.init();
   note.hidden = true;
   const p = canvas.requestPointerLock({ unadjustedMovement: true });
   if (p?.catch) p.catch(() => canvas.requestPointerLock()?.catch?.(() => showNote()));
-});
+}
 function showNote() {
   note.textContent = 'The browser refused mouse capture. Wait a second, then click Resume again.';
   note.hidden = false;
@@ -351,8 +435,8 @@ function handleKeys() {
   if (buyOpen) {
     for (const item of SHOP) {
       if (!input.consume('Digit' + item.key)) continue;
-      buyMsg = match.buy(human, item.id) ?? '';
-      buyMsg.startsWith('Bought') ? sfx.uiOk() : sfx.uiNo();
+      const m = match.buy(human, item.id);
+      if (m != null) feedback.buyMsg(m);
     }
   } else {
     for (const [code, slot] of Object.entries(SLOT_KEYS)) {
@@ -360,6 +444,7 @@ function handleKeys() {
       const before = human.weapon;
       human.select(slot, simTime);
       if (human.weapon !== before) sfx.equip();
+      match?.noteSelect?.(slot);
     }
   }
   if (match && human.alive) {
@@ -375,45 +460,47 @@ function handleKeys() {
 // teammates first; once the whole squad is down, anyone still alive
 function spectateTarget() {
   if (!match || human.alive) return null;
-  let pool = match.teams[0].filter(c => c.alive && !c.isHuman);
-  if (!pool.length) pool = match.bots.filter(c => c.alive);
+  const pool = match.spectatePool();
   return pool.length ? pool[specIdx % pool.length] : null;
 }
 
-// bodies don't overlap: push the player out of anyone alive
+// bodies don't overlap: push players out of anyone alive (the host decides this for clients too)
 function separate() {
-  if (!match || !human.alive) return;
-  for (const b of match.bots) {
-    if (!b.alive) continue;
-    const bp = b.pos, dx = player.pos.x - bp.x, dz = player.pos.z - bp.z, d = Math.hypot(dx, dz);
-    if (d >= 0.7 || d < 1e-4 || Math.abs(player.pos.y - bp.y) > 1.5) continue;
-    const push = 0.7 - d, nx = player.pos.x + (dx / d) * push, nz = player.pos.z + (dz / d) * push;
-    if (!player.overlaps(nx, player.pos.y, nz, player.height)) { player.pos.x = nx; player.pos.z = nz; }
+  if (!match || match.isClient) return;
+  for (const h of match.humans) {
+    if (!h.alive) continue;
+    const p = h.body;
+    for (const b of match.combatants) {
+      if (b === h || !b.alive) continue;
+      const bp = b.pos, dx = p.pos.x - bp.x, dz = p.pos.z - bp.z, d = Math.hypot(dx, dz);
+      if (d >= 0.7 || d < 1e-4 || Math.abs(p.pos.y - bp.y) > 1.5) continue;
+      const push = 0.7 - d, nx = p.pos.x + (dx / d) * push, nz = p.pos.z + (dz / d) * push;
+      if (!p.overlaps(nx, p.pos.y, nz, p.height)) { p.pos.x = nx; p.pos.z = nz; }
+    }
   }
 }
 
 // --- loop: fixed 64 Hz simulation, interpolated rendering
-let last = performance.now(), fpsT = 0, fpsN = 0, lastRound = 0;
+let last = performance.now(), lastSim = last, fpsT = 0, fpsN = 0, lastRound = 0;
 
 function tick() {
   simTime += TICK;
   if (input.consume('Backspace')) resetStats();
   handleKeys();
   updateAds();
+  if (match?.isClient) match.capture(input, human.weapon.adsT);
   if (human.alive) {
     const frozen = match?.frozen;
     player.tick(TICK, simTime, frozen || isAim ? FROZEN : input, playerSfx); // the aim lab is shot from a fixed spot
     if (!frozen && !buyOpen) {
       const shot = human.weapon.tick(TICK, simTime, input, player, sfx);
-      if (shot?.throw) {
-        if (match) { match.util.throwHuman(human, shot); human.thrown(shot.kind, simTime); }
-      } else if (shot?.melee) {
-        if (match) match.resolveMelee(human, shot);
-        else practiceShot(shot);
+      if (shot?.throw || shot?.melee) {
+        if (match) match.humanShot(human, shot);
+        else if (shot.melee) practiceShot(shot);
       } else if (shot) {
         stats.shots++;
         ejectCasing(human.weapon);
-        if (match) match.resolveShot(human, shot);
+        if (match) match.humanShot(human, shot);
         else if (trainer) trainerShot(shot);
         else practiceShot(shot);
         hud.stats(stats);
@@ -437,6 +524,7 @@ function tick() {
     empUntil = 0;
   }
   separate();
+  if (net?.match && !match.isClient) net.afterTick(simTime);
   if (match?.phase === 'over' && input.consume('Enter')) location.reload();
   if (trainer) {
     viewDir.set(0, 0, -1).applyEuler(euler.set(player.pitch, player.yaw, 0));
@@ -472,23 +560,30 @@ function ejectCasing(w) {
   else casings.eject(port);
 }
 
+// advance the simulation by real time; an online match keeps running behind the menu
+const simulating = () => (room ? !!match : state === 'playing');
+function advance() {
+  const now = performance.now(), dt = Math.min(0.1, (now - lastSim) / 1000);
+  lastSim = now;
+  if (!simulating()) return;
+  acc += dt;
+  let n = 0;
+  while (acc >= TICK && n++ < 10) { tick(); acc -= TICK; }
+  if (acc > TICK) acc = 0;
+}
+
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-
-  if (state === 'playing') {
-    acc += dt;
-    let n = 0;
-    while (acc >= TICK && n++ < 10) { tick(); acc -= TICK; }
-    if (acc > TICK) acc = 0;
-    for (const t of targets) t.update(dt);
-  }
-  const a = state === 'playing' ? acc / TICK : 1;
+  advance();
+  if (state === 'playing') for (const t of targets) t.update(dt);
+  const running = simulating();
+  const a = running ? acc / TICK : 1;
   const w = human.weapon;
 
   const cam = gfx.camera, spec = spectateTarget();
-  if (match) for (const b of match.bots) b.spectated = b === spec;
+  if (match) for (const b of match.others) b.spectated = b === spec;
   let fov = settings.fov;
   if (spec) {
     cam.position.lerpVectors(spec.body.prevPos, spec.body.pos, a);
@@ -511,11 +606,11 @@ function frame(now) {
   }
   if (cam.fov !== fov) { cam.fov = fov; cam.updateProjectionMatrix(); }
 
-  if (match) for (const b of match.bots) b.render(a, state === 'playing' ? dt : 0);
+  if (match) for (const b of match.others) b.render(a, running ? dt : 0);
   const scoped = !spec && human.alive && w.def.scope && w.adsT > 0.85;
   human.syncViewmodels(scoped); // the scope overlay replaces the gun
   w.animate(dt, simTime, player, input);
-  animateSpecGun(spec, state === 'playing' ? dt : 0);
+  animateSpecGun(spec, running ? dt : 0);
   if (!human.alive && deathAt && performance.now() - deathAt > 2500) { hud.death(null); deathAt = 0; }
   fx.update(dt);
   casings.update(dt);

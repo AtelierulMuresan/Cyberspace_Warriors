@@ -106,7 +106,7 @@ class Decoy {
   update(now) {
     this.group.children.forEach((m, i) => { m.visible = Math.sin(now * 40 + i) > -0.9; }); // hologram flicker
     if (now >= this.until) return this.destroy();
-    if (now >= this.nextFake) { // fake gunfire: sound, radar ping, alerts the enemy
+    if (now >= this.nextFake && !this.sys.client) { // fake gunfire: sound, radar ping, alerts the enemy
       this.nextFake = now + 0.5 + Math.random() * 0.8;
       const m = this.sys.match;
       m.sfx.shot(m.spatial(this.pos, 120), 'rifle');
@@ -118,15 +118,19 @@ class Decoy {
   destroy() {
     if (!this.alive) return;
     this.alive = false;
+    this.sys.match.hooks.util?.('decoyEnd', this.id);
     this.group.removeFromParent();
     this.sys.match.fx.spark(tmp.set(this.pos.x, this.pos.y + 1, this.pos.z), 0xff3fb4, 1.2);
     this.sys.removeDecoy(this);
   }
 }
 
+// On a client (client = true) this only draws: the host decides detonations and sends them over.
 export class Utilities {
-  constructor(match) {
+  constructor(match, client = false) {
     this.match = match;
+    this.client = client;
+    this.nextId = 0;
     this.scene = match.scene;
     this.projectiles = [];
     this.smokes = [];
@@ -143,9 +147,20 @@ export class Utilities {
   }
 
   // ---------- throwing ----------
-  launch(owner, kind, origin, vel) {
-    this.projectiles.push(new Projectile(this, owner, kind, origin, vel));
+  launch(owner, kind, origin, vel, id = ++this.nextId) {
+    const p = new Projectile(this, owner, kind, origin, vel);
+    p.id = id;
+    this.projectiles.push(p);
+    this.match.hooks.util?.('launch', id, owner.team, owner.side, kind, origin, vel);
     this.match.sfx.burst(0.12, 1800, 400, 0.12, 0, this.match.spatial(origin, 25));
+  }
+
+  // client side: the host says a grenade went off here
+  applyDet(id, pos, now) {
+    const p = this.projectiles.find(q => q.id === id);
+    if (!p) return;
+    p.pos.set(pos.x, pos.y, pos.z);
+    this.detonate(p, now);
   }
 
   // the player throws along the view: LMB far, RMB near; inherits some movement
@@ -172,6 +187,7 @@ export class Utilities {
     for (const p of [...this.projectiles]) {
       p.step(dt / 2, boxes, sfx, spatial); // two substeps keep fast throws out of walls
       p.step(dt / 2, boxes, sfx, spatial);
+      if (this.client) continue;
       const u = UTIL[p.kind];
       let go = p.age >= u.fuse;
       if (p.kind === 'smoke' || p.kind === 'decoy') go ||= p.resting && p.age > 0.4;
@@ -186,6 +202,8 @@ export class Utilities {
   detonate(p, now) {
     p.mesh.removeFromParent();
     this.projectiles.splice(this.projectiles.indexOf(p), 1);
+    this.match.hooks.util?.('det', p.id, p.pos);
+    if (this.client && p.kind === 'emp') return; // its flash and sound arrive as effects
     ({ emp: this.emp, smoke: this.smoke, fire: this.fire, decoy: this.decoy })[p.kind].call(this, p, now);
   }
 
@@ -193,7 +211,7 @@ export class Utilities {
   emp(p, now) {
     const m = this.match, u = UTIL.emp;
     m.fx.spark(p.pos, u.color, 7);
-    m.hooks.shake?.(p.pos, 0.6);
+    m.shakeAll(p.pos, 0.6);
     m.sfx.tone(2400, 0.35, 'sawtooth', 0.25, 0, 300, m.spatial(p.pos, 60));
     m.sfx.burst(0.3, 8000, 2000, 0.2, 0, m.spatial(p.pos, 60));
     for (const c of m.enemies[p.owner.team]) {
@@ -205,7 +223,7 @@ export class Utilities {
       const fwd = tmp2.set(0, 0, -1).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
       const facing = fwd.dot(p.pos.clone().sub(eye).normalize());
       const dur = (facing > 0.5 ? 3.2 : facing > 0 ? 1.8 : 0.6) * (1 - 0.5 * d / u.radius);
-      if (c.isHuman) m.hooks.emp?.(dur);
+      if (c.isHuman) m.to(c).emp(dur);
       else c.blindUntil = Math.max(c.blindUntil ?? 0, now + dur);
     }
   }
@@ -292,6 +310,7 @@ export class Utilities {
 
   decoy(p) {
     const d = new Decoy(this, p.owner, { x: p.pos.x, y: this.groundBelow(p.pos), z: p.pos.z });
+    d.id = p.id;
     this.decoys.push(d);
     for (let t = 0; t < 2; t++) if (t !== d.team) this.match.enemies[t].push(d);
   }

@@ -4,7 +4,7 @@ import { Bot } from './bots.js';
 import { Utilities } from './utility.js';
 import { neon, toon, outlinedBox, PALETTE } from './render.js';
 
-const SQUAD_NAMES = [['YOU', 'VEX', 'RIN', 'KADE', 'ONO'], ['NULL', 'HEX', 'SABLE', 'DRAX', 'MIRA']];
+export const SQUAD_NAMES = [['VEX', 'RIN', 'KADE', 'ONO', 'TAO'], ['NULL', 'HEX', 'SABLE', 'DRAX', 'MIRA']];
 const PRICES = Object.fromEntries(SHOP.map(i => [i.id, i.price]));
 const REASON = {
   elim: { attack: 'Defenders eliminated', defend: 'Attackers eliminated' },
@@ -16,16 +16,46 @@ const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), normal = new THREE.
 const euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 
+export function buildSpikeMesh(scene) {
+  const g = new THREE.Group();
+  const body = outlinedBox(0.36, 0.16, 0.26, toon(0x2a2236), 0.012);
+  body.position.y = 0.08;
+  const light = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.03, 0.2), neon(PALETTE.magenta, 2.5));
+  light.position.y = 0.17;
+  g.add(body, light);
+  g.visible = false;
+  scene.add(g);
+  return { mesh: g, light };
+}
+
+// a primary lying on the ground
+export function dropMesh(scene, def, x, y, z, ry) {
+  const len = { smg: 0.55, shotgun: 0.85, marksman: 1.0 }[def.model] ?? 0.8;
+  const mesh = outlinedBox(0.08, 0.1, len, toon(0x3d3752), 0.012);
+  const glow = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.012, len * 0.5), neon(PALETTE.amber, 1.6));
+  glow.position.y = 0.05;
+  mesh.add(glow);
+  mesh.position.set(x, y, z);
+  mesh.rotation.set(0, ry, Math.PI / 2);
+  scene.add(mesh);
+  return mesh;
+}
+
 /*
-  Round-based spike match between two squads. Team 0 is the player's squad.
+  Round-based spike match between two squads. `human` is the player at this screen; `humans` is every
+  player in the match (online: on the host). Bots fill the remaining slots of each squad.
   Sides swap at halftime: attackers wear Ghostwire colours and carry the spike, defenders wear Helix.
   Phases: buy (frozen) -> live -> post -> next round | over
 */
 export class Match {
   constructor(o) {
-    // o: { scene, world, nav, human, sfx, fx, spatial, los, humanMuzzle, settings, hooks }
+    // o: { scene, world, nav, human, humans?, online?, sfx, fx, spatial, los, humanMuzzle, settings, hooks }
+    // hooks.to(combatant) returns that player's feedback calls (banner, hit, hurt, ...)
     Object.assign(this, o);
-    const size = THREE.MathUtils.clamp(parseInt(o.settings.teamSize, 10) || 5, 1, BOT.maxCount);
+    this.humans = o.humans ?? [this.human];
+    if (!o.humans) this.human.team = 0;
+    const onTeam = t => this.humans.filter(h => h.team === t).length;
+    const size = THREE.MathUtils.clamp(Math.max(parseInt(o.settings.teamSize, 10) || 5, onTeam(0), onTeam(1)), 1, BOT.maxCount);
     const skill = BOT_SKILL[o.settings.diff] ?? BOT_SKILL.normal;
     this.len = MATCH_LENGTH[o.settings.length] ?? MATCH_LENGTH.short;
     this.ray = new THREE.Raycaster();
@@ -38,16 +68,18 @@ export class Match {
       noise: (c, radius) => this.noise(c.pos, c.team, radius),
     };
 
-    this.human.team = 0;
-    this.combatants = [this.human];
+    this.combatants = [...this.humans];
     for (let t = 0; t < 2; t++) {
-      for (let i = t === 0 ? 1 : 0; i < size; i++) {
-        const b = new Bot(this.scene, this.nav, SQUAD_NAMES[t][i], t, skill, this.botCtx);
-        b.isMate = t === 0;
+      for (let i = onTeam(t); i < size; i++) {
+        const b = new Bot(this.scene, this.nav, SQUAD_NAMES[t][i - onTeam(t)], t, skill, this.botCtx);
+        b.isMate = t === this.human.team;
+        if (b.isMate) b.setLabel(b.name);
         this.combatants.push(b);
       }
     }
     this.bots = this.combatants.filter(c => !c.isHuman);
+    this.others = this.combatants.filter(c => c !== this.human);
+    this.hist = [];
     this.enemies = [0, 1].map(t => this.combatants.filter(c => c.team !== t));
     this.teams = [0, 1].map(t => this.combatants.filter(c => c.team === t));
 
@@ -61,7 +93,7 @@ export class Match {
     this.util = new Utilities(this);
     this.drops = [];
     this.now = 0;
-    this.buildSpikeMesh();
+    ({ mesh: this.spikeMesh, light: this.spikeLight } = buildSpikeMesh(this.scene));
     this.startRound(0, true);
   }
 
@@ -69,17 +101,8 @@ export class Match {
   teamOn(side) { return this.sideOf.indexOf(side); }
   alive(team) { return this.teams[team].filter(c => c.alive).length; }
 
-  buildSpikeMesh() {
-    const g = new THREE.Group();
-    const body = outlinedBox(0.36, 0.16, 0.26, toon(0x2a2236), 0.012);
-    body.position.y = 0.08;
-    this.spikeLight = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.03, 0.2), neon(PALETTE.magenta, 2.5));
-    this.spikeLight.position.y = 0.17;
-    g.add(body, this.spikeLight);
-    g.visible = false;
-    this.scene.add(g);
-    this.spikeMesh = g;
-  }
+  to(c) { return this.hooks.to(c); }
+  shakeAll(pos, intensity) { for (const h of this.humans) this.to(h).shake(pos, intensity); }
 
   // ---------- rounds ----------
   startRound(now, reset) {
@@ -95,11 +118,15 @@ export class Match {
       if (reset || !c.alive) c.resetLoadout(now);
       c.side = side;
       const s = sp[side][slot[c.team]++], yaw = side === 'attack' ? sp.attackYaw : sp.defendYaw;
-      if (c.isHuman) {
+      if (c.left) { // disconnected: stays down
+        Object.assign(c, { hp: 0, alive: false, using: null });
+      } else if (c.isHuman) {
         c.body.spawnAt(tmp.set(s.x, 0, s.z), yaw);
         Object.assign(c, { hp: 100, alive: true, using: null, useT: 0 });
         c.primary?.refill();
         c.secondary.refill();
+        c.avatar?.setSide(side);
+        this.to(c).spawn(s.x, s.z, yaw);
       } else {
         c.setSide(side);
         c.spawnAt(s.x, s.z, yaw);
@@ -127,7 +154,7 @@ export class Match {
     }
 
     const atk = this.teams[this.teamOn('attack')];
-    const carrier = atk[(Math.random() * atk.length) | 0];
+    const able = atk.filter(c => c.alive), carrier = able[(Math.random() * able.length) | 0] ?? atk[0];
     Object.assign(this.spike, { state: 'carried', carrier, planter: null });
     this.spike.ver++;
     this.spikeMesh.visible = false;
@@ -135,10 +162,11 @@ export class Match {
     this.phase = 'buy';
     this.phaseEnd = now + ROUND.buy;
     this.buyUntil = now + ROUND.buy + ROUND.buyWindow;
-    const mySide = this.sideOf[0];
-    this.hooks.banner(`ROUND ${this.round}`, mySide === 'attack'
-      ? `Attacking as Ghostwire${carrier.isHuman ? ' · You carry the spike' : ` · ${carrier.name} carries the spike`}`
-      : 'Defending as Helix · Stop the spike', 3);
+    for (const h of this.humans) {
+      this.to(h).banner(`ROUND ${this.round}`, this.sideOf[h.team] === 'attack'
+        ? `Attacking as Ghostwire${carrier === h ? ' · You carry the spike' : ` · ${carrier.name} carries the spike`}`
+        : 'Defending as Helix · Stop the spike', 3);
+    }
   }
 
   endRound(winner, reason) {
@@ -155,20 +183,20 @@ export class Match {
     this.lossStreak[winner] = 0;
     this.lossStreak[loser]++;
 
-    const mine = winner === 0;
-    let title = mine ? 'ROUND WON' : 'ROUND LOST';
-    let sub = REASON[reason][this.sideOf[winner]];
-    if (this.score[winner] >= this.len.win) {
-      this.over = true;
-      title = mine ? 'MATCH WON' : 'MATCH LOST';
-      sub = `${this.score[0]} – ${this.score[1]} · Press Enter for a new match`;
-    } else if (this.round === this.len.half) {
-      this.halftime = true;
-      this.phaseEnd = now + ROUND.halftimePost;
-      sub += ' · Halftime: switching sides';
+    const reasonText = REASON[reason][this.sideOf[winner]];
+    this.over = this.score[winner] >= this.len.win;
+    this.halftime = !this.over && this.round === this.len.half;
+    if (this.halftime) this.phaseEnd = now + ROUND.halftimePost;
+    for (const h of this.humans) {
+      const mine = winner === h.team;
+      let title = mine ? 'ROUND WON' : 'ROUND LOST', sub = reasonText;
+      if (this.over) {
+        title = mine ? 'MATCH WON' : 'MATCH LOST';
+        sub = `${this.score[h.team]} – ${this.score[1 - h.team]} · Press Enter for a new match`;
+      } else if (this.halftime) sub += ' · Halftime: switching sides';
+      this.to(h).banner(title, sub, this.over ? 0 : ROUND.post);
+      this.to(h).roundEnd(mine);
     }
-    this.hooks.banner(title, sub, this.over ? 0 : ROUND.post);
-    this.hooks.roundEnd?.(mine);
   }
 
   checkWin(now) {
@@ -184,7 +212,12 @@ export class Match {
       this.phase = 'live';
       this.phaseEnd = now + ROUND.live;
     }
+    for (const h of this.humans) if (h.isRemote) h.netTick(this, dt, now);
     for (const b of this.bots) b.tick(dt, now, this.botCtx);
+    if (this.online) { // lag compensation history, about 0.4 s
+      this.hist.push(this.combatants.map(c => [c.pos.x, c.pos.y, c.pos.z]));
+      if (this.hist.length > 26) this.hist.shift();
+    }
     this.util.update(dt, now);
     for (const b of this.bots) if (b.alive && b.weapon.def.slot !== 'primary') this.tryPickup(b, false);
     if (this.phase === 'live' || this.phase === 'post') {
@@ -243,7 +276,7 @@ export class Match {
     c.useT = 0;
     this.spikeMesh.position.copy(sp.pos);
     this.spikeMesh.visible = true;
-    this.hooks.banner('SPIKE PLANTED', `Site ${this.plantedSite.name} · ${ROUND.fuse} s fuse`, 2.5);
+    for (const h of this.humans) this.to(h).banner('SPIKE PLANTED', `Site ${this.plantedSite.name} · ${ROUND.fuse} s fuse`, 2.5);
     this.sfx.tone(880, 0.25, 'square', 0.15);
   }
 
@@ -263,7 +296,7 @@ export class Match {
           Object.assign(sp, { state: 'carried', carrier: c });
           sp.ver++;
           this.spikeMesh.visible = false;
-          if (c.isHuman) this.hooks.banner('SPIKE PICKED UP', 'Plant it inside a site: hold E', 2);
+          if (c.isHuman) this.to(c).banner('SPIKE PICKED UP', 'Plant it inside a site: hold E', 2);
           break;
         }
       }
@@ -284,7 +317,7 @@ export class Match {
     sp.ver++;
     this.spikeMesh.visible = false;
     this.fx.spark(tmp.set(sp.pos.x, 1.5, sp.pos.z), 0xff6ad5, 30);
-    this.hooks.shake?.(sp.pos, 2.5);
+    this.shakeAll(sp.pos, 2.5);
     this.sfx.burst(1.4, 2500, 60, 0.9);
     this.sfx.tone(60, 1.2, 'sawtooth', 0.4, 0, 30);
     for (const c of this.combatants) if (c.alive && flat(c.pos, sp.pos) < ROUND.blastRadius) this.kill(null, c, false, null);
@@ -310,16 +343,35 @@ export class Match {
     return { dir, wall, hit, dist: best };
   }
 
+  // run fn with everyone moved back `ticks` steps, so a laggy shooter hits what they saw on screen
+  rewound(ticks, fn) {
+    const frame = ticks && this.hist[Math.max(0, this.hist.length - 1 - ticks)];
+    if (!frame) return fn();
+    const saved = this.combatants.map(c => c.pos.clone());
+    this.combatants.forEach((c, i) => { c.pos.set(...frame[i]); c.syncTransform?.(); });
+    try { return fn(); } finally {
+      this.combatants.forEach((c, i) => { c.pos.copy(saved[i]); c.syncTransform?.(); });
+    }
+  }
+
+  // a player's gun, knife or throw went off
+  humanShot(h, shot) {
+    if (shot.throw) { this.util.throwHuman(h, shot); h.thrown(shot.kind, this.now); }
+    else if (shot.melee) this.resolveMelee(h, shot);
+    else this.resolveShot(h, shot);
+  }
+
   resolveShot(shooter, shot) {
     const def = shooter.weapon.def, origin = this.eyeOf(shooter, tmp2.clone());
-    const muzzle = shooter.isHuman ? this.humanMuzzle() : shooter.muzzleWorld(new THREE.Vector3());
-    if (!shooter.isHuman) this.sfx.shot(this.spatial(shooter.pos, 120), def.model);
+    const muzzle = shooter.isHuman ? this.humanMuzzle(shooter) : shooter.muzzleWorld(new THREE.Vector3());
+    // the local player's gun already sounded; online everyone else still needs to hear it
+    if (shooter !== this.human || this.online) this.sfx.shot(this.spatial(shooter.pos, 120, shooter.peer), def.model);
     shooter.firedUntil = this.now + 0.6; // shows on the enemy radar
     this.noise(shooter.pos, shooter.team, BOT.hearShot);
 
     const rays = shot.pellets ?? [shot];
-    let whizzed = false;
-    rays.forEach((r, i) => {
+    const whizzed = new Set();
+    this.rewound(shooter.rewindTicks, () => rays.forEach((r, i) => {
       const { dir, wall, hit, dist } = this.traceRay(shooter, origin, r.yaw, r.pitch, def.range);
       const len = Number.isFinite(dist) ? dist : 80;
       if (i < 3) this.fx.tracer(muzzle, origin.clone().addScaledVector(dir, len));
@@ -331,23 +383,23 @@ export class Match {
         this.fx.spark(wall.point, 0xffd08a, 0.18);
         if (i < 3) this.fx.debris(wall.point, normal, 0x8a7aa8, 4);
       }
-      // a bullet that passes close to the player's head without hitting: whizz
-      const h = this.human;
-      if (!whizzed && h.alive && shooter.team !== h.team && hit?.c !== h) {
+      // a bullet that passes close to a player's head without hitting: whizz
+      for (const h of this.humans) {
+        if (whizzed.has(h) || !h.alive || shooter.team === h.team || hit?.c === h) continue;
         const head = h.headPoint(tmp), t = head.clone().sub(origin).dot(dir);
         const near = origin.clone().addScaledVector(dir, t);
         if (t > 2 && t < len && head.distanceTo(near) < 1.1) {
-          whizzed = true;
-          this.hooks.whiz?.(near);
+          whizzed.add(h);
+          this.to(h).whiz(near);
         }
       }
-    });
+    }));
   }
 
   // knife: short ray; from behind it multiplies (a heavy backstab always kills)
   resolveMelee(attacker, shot) {
     const def = attacker.weapon.def, origin = this.eyeOf(attacker, tmp2.clone());
-    const { hit } = this.traceRay(attacker, origin, shot.yaw, shot.pitch, def.reach);
+    const { hit } = this.rewound(attacker.rewindTicks, () => this.traceRay(attacker, origin, shot.yaw, shot.pitch, def.reach));
     if (!hit) return false;
     if (hit.c.isDecoy) { hit.c.destroy(); return true; }
     const v = hit.c, vyaw = v.isHuman ? v.body.yaw : v.aimYaw;
@@ -357,7 +409,7 @@ export class Match {
     const dmg = (shot.heavy ? def.heavy.damage : def.light.damage) * (behind ? def.backstab : 1);
     const mdef = { damage: dmg, multipliers: { head: 1, chest: 1, legs: 1 }, rangeMod: 1, armorPen: 0.85, reward: def.reward, short: def.short };
     this.applyDamage(attacker, v, mdef, hit.zone, 0, hit.point);
-    this.sfx.tone(300, 0.08, 'square', 0.2, 0, 120, attacker.isHuman ? null : this.spatial(attacker.pos, 30));
+    this.sfx.tone(300, 0.08, 'square', 0.2, 0, 120, attacker === this.human && !this.online ? null : this.spatial(attacker.pos, 30));
     return true;
   }
 
@@ -382,7 +434,13 @@ export class Match {
     if (!victim.isHuman) { victim.flash = 1; victim.onHurt(attacker, this.now); }
     const killed = victim.hp <= 0;
     if (killed) this.kill(attacker, victim, zone === 'head', def); // game state first, feedback after
-    this.hooks.hit(attacker, victim, dmg, zone, point, killed, def);
+    const head = zone === 'head';
+    if (!def.dot) { // burning shows no impact sparks or hit markers
+      this.fx.spark(point, head ? 0x38e8ff : 0xff3fb4, head ? 0.45 : 0.3);
+      this.fx.debris(point, { x: 0, y: 1, z: 0 }, head ? 0x38e8ff : 0xff3fb4, 4);
+    }
+    if (attacker?.isHuman) this.to(attacker).hit(dmg, head, killed, point, head && victim.helmet, !!def.dot);
+    if (victim.isHuman) this.to(victim).hurt(attacker.pos, !def.dot);
   }
 
   kill(attacker, victim, head, def) {
@@ -398,11 +456,13 @@ export class Match {
     }
     if (this.spike.state === 'carried' && this.spike.carrier === victim) this.dropSpike(victim.pos);
     this.dropWeapon(victim, victim.pos);
-    this.hooks.feed({
-      by: attacker ? attacker.name : null, victim: victim.name, head,
-      weapon: attacker ? (def.short ?? def.name) : 'SPIKE', mine: attacker?.team === 0, victimMine: victim.team === 0,
-    }, victim.team === 0 ? 'bad' : 'good');
-    this.hooks.kill?.(attacker, victim);
+    for (const h of this.humans) {
+      this.to(h).feed({
+        by: attacker ? attacker.name : null, victim: victim.name, head,
+        weapon: attacker ? (def.short ?? def.name) : 'SPIKE', mine: attacker?.team === h.team, victimMine: victim.team === h.team,
+      }, victim.team === h.team ? 'bad' : 'good');
+    }
+    if (victim.isHuman) this.to(victim).death(`ELIMINATED BY ${attacker ? attacker.name : 'THE SPIKE'}`, this.report(victim));
   }
 
   // a defender calls out attackers near a site; teammates elsewhere rotate there
@@ -420,7 +480,7 @@ export class Match {
     }
     this.rotator = best;
     this.intelVer++;
-    if (bot.team === 0) this.hooks.feed(`${bot.name}: contact ${site.name}${best ? `, ${best.name} rotating` : ''}`, 'good');
+    for (const h of this.teams[bot.team]) if (h.isHuman) this.to(h).feed(`${bot.name}: contact ${site.name}${best ? `, ${best.name} rotating` : ''}`, 'good');
   }
   heardNear() {}
 
@@ -468,15 +528,10 @@ export class Match {
       else if (c.weapon.def.slot === 'primary') item = { def: c.weapon.def, mag: c.weapon.mag, reserve: c.weapon.reserve };
     }
     if (!item) return;
-    const len = { smg: 0.55, shotgun: 0.85, marksman: 1.0 }[item.def.model] ?? 0.8;
-    const mesh = outlinedBox(0.08, 0.1, len, toon(0x3d3752), 0.012);
-    const glow = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.012, len * 0.5), neon(PALETTE.amber, 1.6));
-    glow.position.y = 0.05;
-    mesh.add(glow);
-    mesh.position.set(at.x + (Math.random() - 0.5) * 0.6, this.util.groundBelow(tmp.set(at.x, at.y + 0.5, at.z)) + 0.05, at.z + (Math.random() - 0.5) * 0.6);
-    mesh.rotation.set(0, Math.random() * Math.PI * 2, Math.PI / 2);
-    this.scene.add(mesh);
-    this.drops.push({ ...item, mesh, pos: mesh.position });
+    const y = this.util.groundBelow(tmp.set(at.x, at.y + 0.5, at.z)) + 0.05;
+    const mesh = dropMesh(this.scene, item.def, at.x + (Math.random() - 0.5) * 0.6, y, at.z + (Math.random() - 0.5) * 0.6, Math.random() * Math.PI * 2);
+    this.dropId = (this.dropId ?? 0) + 1;
+    this.drops.push({ ...item, id: this.dropId, mesh, pos: mesh.position, ry: mesh.rotation.y });
   }
 
   nearestDrop(pos, range) {
@@ -543,38 +598,47 @@ export class Match {
     else if (sp.state === 'planted' && this.phase === 'live') time = sp.plantedAt + ROUND.fuse - now;
     else if (this.phase === 'live') time = this.phaseEnd - now;
     else time = 0;
+    const mine = this.human.team, theirs = 1 - mine;
     return {
-      round: this.round, score: this.score, mySide: this.sideOf[0],
+      round: this.round, score: [this.score[mine], this.score[theirs]], mySide: this.sideOf[mine],
       phase: this.phase, planted: sp.state === 'planted', time: Math.max(0, time),
-      alive: [this.teams[0].map(c => c.alive), this.teams[1].map(c => c.alive)],
+      alive: [this.teams[mine].map(c => c.alive), this.teams[theirs].map(c => c.alive)],
       carrying: sp.state === 'carried' && sp.carrier === this.human,
     };
   }
 
   radarDots() {
     const dots = [], now = this.now;
-    for (const c of this.combatants) {
-      if (!c.alive || c.isHuman) continue;
-      if (c.team === 0) dots.push({ x: c.pos.x, z: c.pos.z, color: '#38e8ff' });
+    const mine = this.human.team;
+    for (const c of this.others) {
+      if (!c.alive) continue;
+      if (c.team === mine) dots.push({ x: c.pos.x, z: c.pos.z, color: '#38e8ff' });
       else if (c.spottedUntil > now || c.firedUntil > now) dots.push({ x: c.pos.x, z: c.pos.z, color: '#ff3fb4' });
     }
-    for (const d of this.util.decoys) if (d.team !== 0 && d.firedUntil > now) dots.push({ x: d.pos.x, z: d.pos.z, color: '#ff3fb4' });
+    for (const d of this.util.decoys) if (d.team !== mine && d.firedUntil > now) dots.push({ x: d.pos.x, z: d.pos.z, color: '#ff3fb4' });
     dots.unshift(...this.util.radarDots());
     const sp = this.spike;
     if (sp.state === 'dropped' || sp.state === 'planted') dots.push({ x: sp.pos.x, z: sp.pos.z, color: '#ffb347', square: true });
-    else if (sp.state === 'carried' && sp.carrier.team === 0 && !sp.carrier.isHuman) {
+    else if (sp.state === 'carried' && sp.carrier.team === mine && sp.carrier !== this.human) {
       dots.push({ x: sp.carrier.pos.x, z: sp.carrier.pos.z, color: '#ffb347', square: true });
     }
     return dots;
   }
 
-  scoreboard() {
+  // teammates first; once the squad is down, anyone still alive
+  spectatePool() {
+    const alive = this.others.filter(c => c.alive), mates = alive.filter(c => c.team === this.human.team);
+    return mates.length ? mates : alive;
+  }
+
+  // team 0 in the rows means "the viewer's squad"
+  scoreboard(viewer = this.human) {
     const rounds = Math.max(1, this.round - (this.phase === 'buy' || this.phase === 'live' ? 1 : 0));
     return this.combatants.map(c => ({
-      name: c.name, team: c.team, alive: c.alive, k: c.kills, d: c.deaths,
+      name: c.name, team: c.team === viewer.team ? 0 : 1, alive: c.alive, k: c.kills, d: c.deaths,
       adr: Math.round((c.damage ?? 0) / rounds),
       hs: c.kills ? Math.round(((c.hsKills ?? 0) / c.kills) * 100) : 0,
-      credits: c.team === 0 ? c.credits : null, me: c.isHuman,
+      credits: c.team === viewer.team ? c.credits : null, me: c === viewer,
     }));
   }
 

@@ -37,6 +37,9 @@ export class Human {
   get pos() { return this.body.pos; }
   get hSpeed() { return this.body.hSpeed; }
   get utilCount() { return UTIL_ORDER.reduce((n, k) => n + this.util[k], 0); }
+  get aimYaw() { return this.body.yaw; }
+  get aimPitch() { return this.body.pitch; }
+  viewAngles() { return [this.body.yaw, this.body.pitch]; } // for spectators
 
   headPoint(out) { const p = this.body.pos; return out.set(p.x, p.y + this.body.eye + 0.02, p.z); }
   chestPoint(out) { const p = this.body.pos; return out.set(p.x, p.y + (this.body.crouching ? 0.8 : 1.15), p.z); }

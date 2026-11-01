@@ -1,4 +1,16 @@
-# Neon Static: Build 0.6 (Milestone 6, polish, UI and aim trainer)
+# Neon Static: Build 0.7 (Milestone 7, online multiplayer)
+
+**Play:** http://www.atelierulmuresan.ro/Cyberspace_Warriors/
+
+## Online
+Open the **Online** tab, enter a username and press **Create match**. Send the link to your friends; they enter a username and join. Pick squads in the lobby, then the host presses **Start match**. Bots fill empty slots, up to 5v5.
+
+- **How it works:** there is no game server. The host's browser runs the match and players connect to it directly over WebRTC (PeerJS). Clients send inputs and predict their own movement; the host decides everything else, including hits, with lag compensation.
+- **Keep the host's tab open.** If the host leaves, the match ends. The match keeps running behind the menu and in a background tab.
+- **Late joining isn't supported:** a link stops accepting players once the match starts.
+- **Connecting:** the free public PeerJS service introduces the players, and PeerJS's free relay is the fallback for strict networks. Both are best-effort with no guarantee of uptime.
+- **Cheating:** the host's browser is the authority, so this suits friends rather than open public play.
+- **Code:** `src/netgame.js` (host, client, prediction, snapshots) and `src/lobby.js` (Online tab).
 
 ## Menu (Esc)
 Tabs: **Play** (map, squad size, length, difficulty), **Aim trainer**, **Settings**, **Crosshair** and **Controls**. The last tab you opened is remembered.

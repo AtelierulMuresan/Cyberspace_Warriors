@@ -269,3 +269,13 @@ kbd { font: 12px var(--mono); border: 1px solid var(--line); border-bottom-width
 #deathReport .to { color: var(--cyan); }
 #deathReport .from { color: var(--magenta); }
 #scoreboard .mvp { margin: 0 0 8px; color: var(--amber); letter-spacing: 0.12em; font-size: 13px; }
+
+/* ---------- online lobby ---------- */
+.settings input#netName { font: 14px var(--display); background: #160f26; color: var(--text); border: 1px solid var(--line); padding: 8px; }
+#netGo, #netStart { font-size: 14px; padding: 10px 24px; justify-self: start; }
+#netGo:disabled, #netStart:disabled { opacity: 0.5; cursor: wait; }
+#netStatus.bad { color: var(--magenta); }
+.squads { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px; margin-bottom: 14px; }
+.squads h3 { margin: 0 0 6px; font-size: 12px; color: var(--dim); letter-spacing: 0.08em; font-weight: 500; }
+.squads ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; min-height: 40px; font-size: 14px; }
+.squads li.me { color: var(--amber); }

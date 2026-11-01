@@ -24,46 +24,15 @@ class BotInput {
   consume(c) { return this.pressed.delete(c); }
 }
 
-/*
-  A squad bot. Drives the same Player physics and Weapon as the human through a fake input.
-  Combat states (interrupt everything):  engage -> seek (hunt) / cover (break sight)
-  Otherwise it runs a task chosen by objective() from its side and the spike's state:
-    route  walk a lane via waypoints     goto  walk to a spot
-    hold   watch an angle                use   stand still and plant / purge (match runs the timer)
-*/
-export class Bot {
-  constructor(scene, nav, name, team, skill, ctx) {
-    this.isHuman = false;
-    this.name = name;
-    this.team = team;
-    this.sk = skill;
-    this.nav = nav;
-    this.body = new Player(ctx.world);
-    this.input = new BotInput();
-    this.weapon = new Weapon(WEAPONS.vox9, null);
-    this.stepSfx = {
-      step: () => { ctx.sfx.step(ctx.spatial(this.body.pos, 22)); ctx.noise(this, BOT.hearStep); },
-      land() {},
-    };
-    this.hp = 100; this.armor = 0; this.helmet = false; this.credits = 0;
-    this.kills = 0; this.deaths = 0;
-    this.alive = true;
-    this.using = null; this.useT = 0;
-    this.lastKnown = new THREE.Vector3();
-    this.alertPos = new THREE.Vector3();
-    this.phase = Math.random() * 6;
-    this.walkT = 0; this.flash = 0; this.flashT = 0;
-    this.spottedUntil = 0;
+// A visible player body: used by bots, by other players on the host, and by every player on a client.
+export class Avatar {
+  constructor(scene) {
+    this.walkT = 0;
+    this.flash = 0;
+    this.flashT = 0;
+    this.spectated = false;
+    this.isMate = false;
     this.buildModel(scene);
-  }
-
-  get pos() { return this.body.pos; }
-  get hSpeed() { return this.body.hSpeed; }
-  headPoint(out) { const p = this.body.pos; return out.set(p.x, p.y + 1.66, p.z); }
-  chestPoint(out) { const p = this.body.pos; return out.set(p.x, p.y + 1.15, p.z); }
-  rayHit(raycaster) {
-    const h = raycaster.intersectObjects(this.parts, false)[0];
-    return h ? { distance: h.distance, zone: h.object.userData.part, point: h.point } : null;
   }
 
   buildModel(scene) {
@@ -122,6 +91,88 @@ export class Bot {
     this.stripMat.color.set(l.strip).multiplyScalar(2);
   }
 
+  setGun(def) { this.gunMesh.scale.z = { pistol: 0.5, smg: 0.7, shotgun: 1.05, marksman: 1.3 }[def.model] ?? 1; }
+
+  // teammates get their name over their head
+  setLabel(name) {
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 48;
+    const g = c.getContext('2d');
+    g.font = '700 30px Consolas, monospace'; g.textAlign = 'center'; g.fillStyle = '#7ff2ff';
+    g.fillText(name, 128, 34);
+    this.label = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
+    this.label.scale.set(1.3, 0.25, 1);
+    this.label.position.y = 2.4;
+    this.label.visible = false;
+    this.group.add(this.label);
+  }
+
+  // set group.position first
+  pose(yaw, speed, alive, crouching, dt) {
+    const g = this.group;
+    g.rotation.y = yaw + Math.PI; // model faces +Z
+    g.rotation.x = alive ? 0 : Math.max(-Math.PI / 2, g.rotation.x - dt * 7);
+    g.scale.y = crouching ? 0.72 : 1;
+    const sp = alive ? speed : 0;
+    this.walkT += dt * sp * 2.2;
+    const swing = Math.sin(this.walkT) * 0.5 * Math.min(1, sp / MOVE.runSpeed);
+    this.legs[0].rotation.x = swing;
+    this.legs[1].rotation.x = -swing;
+    this.flash = Math.max(0, this.flash - dt * 6);
+    this.mat.emissive.setScalar(this.flash * 0.8);
+    this.headMat.emissive.setScalar(this.flash * 0.8);
+    this.flashT -= dt;
+    this.muzzleFlash.visible = this.flashT > 0;
+    this.marker.visible = alive && this.isMate;
+    if (this.label) this.label.visible = alive && this.isMate;
+    g.visible = !this.spectated; // the spectator camera sits inside this head
+    g.updateMatrixWorld();
+  }
+
+  muzzleWorld(out) { return this.muzzleFlash.getWorldPosition(out); }
+}
+
+/*
+  A squad bot. Drives the same Player physics and Weapon as the human through a fake input.
+  Combat states (interrupt everything):  engage -> seek (hunt) / cover (break sight)
+  Otherwise it runs a task chosen by objective() from its side and the spike's state:
+    route  walk a lane via waypoints     goto  walk to a spot
+    hold   watch an angle                use   stand still and plant / purge (match runs the timer)
+*/
+export class Bot extends Avatar {
+  constructor(scene, nav, name, team, skill, ctx) {
+    super(scene);
+    this.isHuman = false;
+    this.name = name;
+    this.team = team;
+    this.sk = skill;
+    this.nav = nav;
+    this.body = new Player(ctx.world);
+    this.input = new BotInput();
+    this.weapon = new Weapon(WEAPONS.vox9, null);
+    this.stepSfx = {
+      step: () => { ctx.sfx.step(ctx.spatial(this.body.pos, 22)); ctx.noise(this, BOT.hearStep); },
+      land() {},
+    };
+    this.hp = 100; this.armor = 0; this.helmet = false; this.credits = 0;
+    this.kills = 0; this.deaths = 0;
+    this.alive = true;
+    this.using = null; this.useT = 0;
+    this.lastKnown = new THREE.Vector3();
+    this.alertPos = new THREE.Vector3();
+    this.phase = Math.random() * 6;
+    this.spottedUntil = 0;
+  }
+
+  get pos() { return this.body.pos; }
+  get hSpeed() { return this.body.hSpeed; }
+  headPoint(out) { const p = this.body.pos; return out.set(p.x, p.y + 1.66, p.z); }
+  chestPoint(out) { const p = this.body.pos; return out.set(p.x, p.y + 1.15, p.z); }
+  rayHit(raycaster) {
+    const h = raycaster.intersectObjects(this.parts, false)[0];
+    return h ? { distance: h.distance, zone: h.object.userData.part, point: h.point } : null;
+  }
+
   spawnAt(x, z, yaw) {
     this.body.spawnAt(tmp.set(x, 0, z), yaw);
     this.aimYaw = this.prevAimYaw = yaw;
@@ -137,14 +188,13 @@ export class Bot {
     this.lastSeen = -10;
     this.nextSense = 0;
     this.coverUsed = false;
-    this.group.rotation.x = 0;
     this.syncTransform();
   }
 
   setWeapon(def, ammo) {
     this.weapon = new Weapon(def, null);
     if (ammo) { this.weapon.mag = ammo.mag; this.weapon.reserve = ammo.reserve; }
-    this.gunMesh.scale.z = { pistol: 0.5, smg: 0.7, shotgun: 1.05, marksman: 1.3 }[def.model] ?? 1;
+    this.setGun(def);
     this.body.speedScale = def.speed ?? 1;
   }
 
@@ -566,23 +616,8 @@ export class Bot {
   }
 
   render(alpha, dt) {
-    const g = this.group, b = this.body;
-    g.position.lerpVectors(b.prevPos, b.pos, alpha);
-    g.rotation.y = this.aimYaw + Math.PI;
-    if (!this.alive) g.rotation.x = Math.max(-Math.PI / 2, g.rotation.x - dt * 7);
-    const sp = this.alive ? b.hSpeed : 0;
-    this.walkT += dt * sp * 2.2;
-    const swing = Math.sin(this.walkT) * 0.5 * Math.min(1, sp / MOVE.runSpeed);
-    this.legs[0].rotation.x = swing;
-    this.legs[1].rotation.x = -swing;
-    this.flash = Math.max(0, this.flash - dt * 6);
-    this.mat.emissive.setScalar(this.flash * 0.8);
-    this.headMat.emissive.setScalar(this.flash * 0.8);
-    this.flashT -= dt;
-    this.muzzleFlash.visible = this.flashT > 0;
-    this.marker.visible = this.alive && this.isMate;
-    g.visible = !this.spectated; // the spectator camera sits inside this head
-    g.updateMatrixWorld();
+    this.group.position.lerpVectors(this.body.prevPos, this.body.pos, alpha);
+    this.pose(this.aimYaw, this.body.hSpeed, this.alive, false, dt);
   }
 
   // interpolated view for the spectator camera
@@ -591,6 +626,5 @@ export class Bot {
     return [this.prevAimYaw + dy * alpha, this.prevAimPitch + (this.aimPitch - this.prevAimPitch) * alpha];
   }
 
-  muzzleWorld(out) { return this.muzzleFlash.getWorldPosition(out); }
   eyeWorld(out) { const p = this.body.pos; return out.set(p.x, p.y + MOVE.standEye, p.z); }
 }

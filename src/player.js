@@ -43,6 +43,22 @@ export class Player {
 
   get hSpeed() { return Math.hypot(this.vel.x, this.vel.z); }
 
+  // everything tick() changes, so a client can replay inputs and undo them
+  saveState() {
+    return {
+      pos: this.pos.clone(), prevPos: this.prevPos.clone(), vel: this.vel.clone(),
+      yaw: this.yaw, pitch: this.pitch, height: this.height, eye: this.eye, prevEye: this.prevEye,
+      crouching: this.crouching, onGround: this.onGround, jumpBuffer: this.jumpBuffer, stepTimer: this.stepTimer,
+      stopStart: this.stopStart, lastStopMs: this.lastStopMs, walking: this.walking, speedScale: this.speedScale, landDip: this.landDip,
+    };
+  }
+
+  restoreState(s) {
+    const { pos, prevPos, vel, ...rest } = s;
+    this.pos.copy(pos); this.prevPos.copy(prevPos); this.vel.copy(vel);
+    Object.assign(this, rest);
+  }
+
   overlaps(px, py, pz, h) {
     const r = MOVE.radius;
     for (const b of this.world.boxes) {

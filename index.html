@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=Share+Tech+Mono&display=swap">
 <link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script type="importmap">
 {
   "imports": {
@@ -97,6 +98,7 @@
 
     <nav class="tabs" role="tablist">
       <button type="button" role="tab" data-tab="play">Play</button>
+      <button type="button" role="tab" data-tab="online">Online</button>
       <button type="button" role="tab" data-tab="aim">Aim trainer</button>
       <button type="button" role="tab" data-tab="settings">Settings</button>
       <button type="button" role="tab" data-tab="crosshair">Crosshair</button>
@@ -148,6 +150,33 @@
             <li><b>Spray</b>: hold fire on a wall and pull down, then left, right and left again.</li>
           </ul>
           <button id="resetStats" type="button" class="ghost">Reset stats</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="tabpanel" data-panel="online" hidden>
+      <div class="cols">
+        <div class="settings">
+          <h2>Play online</h2>
+          <label for="netName">Username</label>
+          <input id="netName" type="text" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Letters and numbers, up to 16">
+          <button id="netGo" type="button">Create match</button>
+          <p class="hint" id="netStatus" role="status">Create a match, then send the link to your friends. Your browser hosts it, so keep this tab open.</p>
+          <div id="netRoomRow" hidden>
+            <label for="netLink">Room <output id="netRoom"></output></label>
+            <div class="coderow"><input id="netLink" type="text" readonly><button id="netCopy" type="button" class="ghost">Copy link</button></div>
+          </div>
+        </div>
+        <div id="netLobby" hidden>
+          <h2>Lobby</h2>
+          <div class="squads">
+            <div><h3>Squad 1 · attacks first</h3><ul id="netSquad0"></ul></div>
+            <div><h3>Squad 2 · defends first</h3><ul id="netSquad1"></ul></div>
+          </div>
+          <div class="presets">
+            <button id="netSwap" type="button" class="ghost">Switch squad</button>
+            <button id="netStart" type="button" hidden>START MATCH</button>
+          </div>
         </div>
       </div>
     </div>

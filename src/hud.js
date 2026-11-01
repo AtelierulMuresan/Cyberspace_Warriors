@@ -1,6 +1,7 @@
 import { SHOP } from './config.js';
 import { applyCrosshair } from './menu.js';
 
+const esc = t => String(t).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`); // usernames come from other players
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 // DOM HUD. Every setter caches its last value so per-frame calls are cheap.
@@ -104,8 +105,8 @@ export class Hud {
     if (!text) return;
     this.el.deathText.textContent = text;
     const rows = [];
-    for (const t of report?.taken ?? []) rows.push(`<div class="from"><span>${t.name} → you</span><span>${t.dmg} in ${t.hits} hit${t.hits > 1 ? 's' : ''}</span></div>`);
-    for (const d of report?.dealt ?? []) rows.push(`<div class="to"><span>You → ${d.name}</span><span>${d.dmg} in ${d.hits} hit${d.hits > 1 ? 's' : ''}</span></div>`);
+    for (const t of report?.taken ?? []) rows.push(`<div class="from"><span>${esc(t.name)} → you</span><span>${t.dmg} in ${t.hits} hit${t.hits > 1 ? 's' : ''}</span></div>`);
+    for (const d of report?.dealt ?? []) rows.push(`<div class="to"><span>You → ${esc(d.name)}</span><span>${d.dmg} in ${d.hits} hit${d.hits > 1 ? 's' : ''}</span></div>`);
     document.getElementById('deathReport').innerHTML = rows.join('');
     document.getElementById('deathReport').hidden = !rows.length;
   }
@@ -195,10 +196,10 @@ export class Hud {
     this.el.board.hidden = !rows;
     if (!rows) return;
     const team = t => rows.filter(r => r.team === t).sort((a, b) => b.k - a.k || b.adr - a.adr).map(r =>
-      `<tr class="${r.alive || mvp ? '' : 'dead'}${r.me ? ' me' : ''}"><td>${r.name}</td><td>${r.k}</td><td>${r.d}</td><td>${r.adr}</td><td>${r.hs}%</td><td>${r.credits ?? ''}</td></tr>`).join('');
+      `<tr class="${r.alive || mvp ? '' : 'dead'}${r.me ? ' me' : ''}"><td>${esc(r.name)}</td><td>${r.k}</td><td>${r.d}</td><td>${r.adr}</td><td>${r.hs}%</td><td>${r.credits ?? ''}</td></tr>`).join('');
     const head = label => `<thead><tr><th>${label}</th><th>K</th><th>D</th><th>ADR</th><th>HS</th><th>${label === 'Your squad' ? 'CR' : ''}</th></tr></thead>`;
     this.set('board', this.el.board, 'html',
-      (mvp ? `<p class="mvp">MATCH MVP · ${mvp}</p>` : '') +
+      (mvp ? `<p class="mvp">MATCH MVP · ${esc(mvp)}</p>` : '') +
       `<table>${head('Your squad')}<tbody>${team(0)}</tbody>${head('Enemy squad')}<tbody>${team(1)}</tbody></table>`);
   }
 
