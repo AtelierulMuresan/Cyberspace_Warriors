@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neon Static</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=Share+Tech+Mono&display=swap">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud" aria-hidden="true">
+  <div id="xhair" class="xhair"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i><i class="dot"></i></div>
+  <svg id="hitmarker" viewBox="-20 -20 40 40" width="40" height="40">
+    <path d="M-12-12L-6-6M12-12L6-6M-12 12L-6 6M12 12L6 6" />
+  </svg>
+  <div id="dmg"></div>
+  <div id="hurt"></div>
+  <div id="dmgdir"></div>
+  <div id="death" hidden><strong id="deathText"></strong><span id="deathSub">Waiting for the next round</span><div id="deathReport"></div></div>
+
+  <div id="roundbar" class="match-only">
+    <div class="team mine"><small id="sideMine">GHOSTWIRE</small><span id="scMine">0</span><div class="pips" id="pipsMine"></div></div>
+    <div class="clock"><span id="rtime">0:00</span><small id="rphase">BUY</small></div>
+    <div class="team enemy"><small id="sideEnemy">HELIX</small><span id="scEnemy">0</span><div class="pips" id="pipsEnemy"></div></div>
+  </div>
+  <div id="banner" hidden><strong id="bTitle"></strong><span id="bSub"></span></div>
+  <div id="carry" hidden>◆ SPIKE · plant inside A or B: hold E</div>
+  <div id="usebar" hidden><span id="useLabel"></span><div class="track"><div id="useFill"></div></div></div>
+  <div id="spectate" hidden></div>
+  <div id="buymenu" hidden>
+    <div class="buyhead"><strong>BUY</strong><span id="buyCredits"></span></div>
+    <ul id="buyList"></ul>
+    <p id="buyMsg"></p>
+    <small>Press the number to buy · B to close</small>
+  </div>
+  <div id="scoreboard" hidden></div>
+  <div id="drillbar" class="aim-only"></div>
+  <div id="scope" hidden><i class="h"></i><i class="v"></i></div>
+  <div id="emp"></div>
+  <ul id="slots" class="match-only"></ul>
+  <div id="prompt" hidden></div>
+
+  <div id="radar">
+    <canvas id="minimap" width="180" height="180"></canvas>
+    <div class="radar-foot"><span id="callout"></span><span id="fps">— FPS</span></div>
+  </div>
+  <div id="feed"></div>
+
+  <dl id="stats">
+    <div><dt>Shots</dt><dd id="sShots">0</dd></div>
+    <div><dt>Hits</dt><dd id="sHits">0</dd></div>
+    <div><dt>Acc</dt><dd id="sAcc">—</dd></div>
+    <div><dt>HS</dt><dd id="sHs">—</dd></div>
+    <div><dt>Kills</dt><dd id="sKills">0</dd></div>
+    <div><dt>Deaths</dt><dd id="sDeaths">0</dd></div>
+  </dl>
+
+  <div id="speedo">
+    <div class="row"><span id="spd">0.0</span><small>m/s</small><span id="mstate" data-state="ACCURATE">ACCURATE</span></div>
+    <div class="bar"><div id="spdbar"></div><div class="thr"></div></div>
+    <div class="row sub"><small>Last stop</small><span id="stop">—</span></div>
+  </div>
+
+  <div id="vitals">
+    <span class="hp" id="hpv">100</span><small>HP</small>
+    <span class="ar" id="arv">0</span><small>ARMOR</small><small id="helm" hidden>+ HELMET</small>
+    <span id="credits" class="match-only"></span>
+  </div>
+
+  <div id="ammo">
+    <div><span id="mag">12</span><span class="sep">/</span><span id="res">48</span></div>
+    <small id="wname">VOX-9</small>
+  </div>
+</div>
+
+<div id="overlay">
+  <section class="panel">
+    <p class="eyebrow" id="eyebrow">Neon Static</p>
+    <h1 data-text="NEON STATIC">NEON STATIC</h1>
+    <div class="deploy-row">
+      <button id="deploy" type="button">DEPLOY</button>
+      <p class="lede" id="modeLede">Rainline Market, up to 5v5. Ghostwire attacks and plants the spike; Helix defends and purges it. Sides swap at halftime.</p>
+    </div>
+    <p id="note" class="note" hidden></p>
+
+    <nav class="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="play">Play</button>
+      <button type="button" role="tab" data-tab="aim">Aim trainer</button>
+      <button type="button" role="tab" data-tab="settings">Settings</button>
+      <button type="button" role="tab" data-tab="crosshair">Crosshair</button>
+      <button type="button" role="tab" data-tab="controls">Controls</button>
+    </nav>
+
+    <div class="tabpanel" data-panel="play">
+      <div class="cols">
+        <div class="settings">
+          <h2>Match</h2>
+          <label for="map">Map</label>
+          <select id="map"></select>
+          <label for="teamSize">Squad size</label>
+          <select id="teamSize">
+            <option value="1">1v1</option>
+            <option value="2">2v2</option>
+            <option value="3">3v3</option>
+            <option value="4">4v4</option>
+            <option value="5">5v5</option>
+          </select>
+          <label for="length">Match length</label>
+          <select id="length">
+            <option value="short">Short: first to 5, swap after 4</option>
+            <option value="full">Full: first to 13, swap after 12</option>
+          </select>
+          <label for="diff">Bot difficulty</label>
+          <select id="diff">
+            <option value="easy">Easy: slow reactions, no strafing</option>
+            <option value="normal">Normal: strafes, hunts sounds, uses cover</option>
+            <option value="hard">Hard: fast flicks, headshot-hungry</option>
+          </select>
+          <p class="hint">Changing these restarts the match.</p>
+        </div>
+        <div>
+          <h2>How a round works</h2>
+          <ul class="drills">
+            <li><b>Buy phase</b> (12 s, frozen): press B in spawn. SMG 1250, shotgun 1050, rifle 2700, scoped DMR 4750, armour and four kinds of throwables.</li>
+            <li><b>Attack</b>: carry the spike to site A or B and hold E for 3.2 s. It goes off after 40 s.</li>
+            <li><b>Defend</b>: kill all attackers, run out the 1:45 clock, or hold E on a planted spike for 7 s.</li>
+            <li><b>Economy</b>: wins pay 3250–3500, losses 1400 rising to 3400, kills 300 (more with SMG, shotgun and knife). Dying loses your gear.</li>
+            <li><b>Throwables</b>: EMP blinds, smoke blocks sight, fire burns an area, the decoy fakes gunfire.</li>
+          </ul>
+        </div>
+        <div>
+          <h2>Practice range</h2>
+          <ul class="drills">
+            <li><b>Test Range 07</b> (pick it under Map): one-tap heads at 10–45 m, a strafe yard with peekers, and jump boxes.</li>
+            <li><b>Counter-strafe</b>: tap the opposite key to stop. The speed meter shows your stop time.</li>
+            <li><b>Spray</b>: hold fire on a wall and pull down, then left, right and left again.</li>
+          </ul>
+          <button id="resetStats" type="button" class="ghost">Reset stats</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="tabpanel" data-panel="aim" hidden>
+      <div class="cols" id="drillList"></div>
+      <p class="hint">You stand still on the firing line. Press Enter to restart a drill once it ends. Best scores are saved in this browser.</p>
+    </div>
+
+    <div class="tabpanel" data-panel="settings" hidden>
+      <div class="cols">
+        <div class="settings">
+          <h2>Mouse</h2>
+          <label for="sens">Sensitivity <output id="sensOut"></output></label>
+          <input id="sens" type="range" min="0.2" max="6" step="0.05">
+          <p class="hint">Same yaw scale as Source games, so your usual sensitivity carries over.</p>
+          <label for="adsSens">ADS sensitivity multiplier <output id="adsSensOut"></output></label>
+          <input id="adsSens" type="range" min="0.5" max="1.5" step="0.05">
+          <label for="ads">Aim down sights (right mouse)</label>
+          <select id="ads">
+            <option value="hold">Hold to aim</option>
+            <option value="toggle">Click to toggle</option>
+            <option value="off">Off (hip-fire only)</option>
+          </select>
+        </div>
+        <div class="settings">
+          <h2>Video</h2>
+          <label for="fov">Vertical FOV <output id="fovOut"></output></label>
+          <input id="fov" type="range" min="60" max="90" step="1">
+          <label for="scale">Render scale <output id="scaleOut"></output></label>
+          <input id="scale" type="range" min="0.5" max="1.5" step="0.05">
+          <label for="bloom">Neon bloom</label>
+          <select id="bloom"><option value="on">On</option><option value="off">Off (faster)</option></select>
+          <label for="rain">Rain</label>
+          <select id="rain"><option value="high">Heavy</option><option value="low">Light</option><option value="off">Off</option></select>
+          <label class="check"><input id="showFps" type="checkbox"> Show FPS</label>
+          <label class="check"><input id="showStats" type="checkbox"> Show shot stats</label>
+          <label class="check"><input id="showSpeed" type="checkbox"> Show speed meter</label>
+        </div>
+        <div class="settings">
+          <h2>Audio</h2>
+          <label for="vol">Master <output id="volOut"></output></label>
+          <input id="vol" type="range" min="0" max="1" step="0.05">
+          <label for="volAmb">Ambience: rain, city, sirens <output id="volAmbOut"></output></label>
+          <input id="volAmb" type="range" min="0" max="1" step="0.05">
+          <label for="volUi">Interface <output id="volUiOut"></output></label>
+          <input id="volUi" type="range" min="0" max="1" step="0.05">
+        </div>
+      </div>
+    </div>
+
+    <div class="tabpanel" data-panel="crosshair" hidden>
+      <div class="cols">
+        <div class="xh-stage"><div id="xhPreview" class="xhair"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i><i class="dot"></i></div></div>
+        <div class="settings">
+          <h2>Shape</h2>
+          <label for="xhLen">Length <output id="xhLenOut"></output></label>
+          <input id="xhLen" type="range" min="0" max="20" step="1">
+          <label for="xhThick">Thickness <output id="xhThickOut"></output></label>
+          <input id="xhThick" type="range" min="1" max="6" step="1">
+          <label for="xhGap">Gap <output id="xhGapOut"></output></label>
+          <input id="xhGap" type="range" min="0" max="20" step="1">
+          <label class="check"><input id="xhDot" type="checkbox"> Centre dot</label>
+          <label class="check"><input id="xhOutline" type="checkbox"> Black outline</label>
+          <label class="check"><input id="xhDynamic" type="checkbox"> Dynamic: opens up with your inaccuracy</label>
+        </div>
+        <div class="settings">
+          <h2>Colour and presets</h2>
+          <label for="xhColor">Colour</label>
+          <input id="xhColor" type="color">
+          <div class="presets" id="xhPresets"></div>
+          <label for="xhCode">Share code</label>
+          <div class="coderow"><input id="xhCode" type="text" spellcheck="false"><button id="xhCopy" type="button" class="ghost">Copy</button></div>
+          <button id="xhApply" type="button" class="ghost">Apply pasted code</button>
+          <p class="hint" id="xhMsg"></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="tabpanel" data-panel="controls" hidden>
+      <div class="cols">
+        <div>
+          <h2>Movement and combat</h2>
+          <dl class="keys">
+            <dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></dt><dd>Move</dd>
+            <dt><kbd>Space</kbd><kbd>Wheel ↓</kbd></dt><dd>Jump</dd>
+            <dt><kbd>C</kbd></dt><dd>Crouch (hold)</dd>
+            <dt><kbd>Shift</kbd></dt><dd>Walk, no footsteps</dd>
+            <dt><kbd>LMB</kbd></dt><dd>Fire · slash · throw far · next spectate</dd>
+            <dt><kbd>RMB</kbd></dt><dd>Aim down sights · heavy stab · lob short</dd>
+            <dt><kbd>R</kbd></dt><dd>Reload</dd>
+          </dl>
+        </div>
+        <div>
+          <h2>Match</h2>
+          <dl class="keys">
+            <dt><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd></dt><dd>Primary / pistol / knife / throwables</dd>
+            <dt><kbd>B</kbd></dt><dd>Buy menu (in spawn, early round)</dd>
+            <dt><kbd>F</kbd><kbd>G</kbd></dt><dd>Pick up / drop a weapon</dd>
+            <dt><kbd>E</kbd></dt><dd>Hold: plant / purge spike</dd>
+            <dt><kbd>Tab</kbd></dt><dd>Scoreboard (hold)</dd>
+            <dt><kbd>Backspace</kbd></dt><dd>Reset shot stats</dd>
+            <dt><kbd>Enter</kbd></dt><dd>New match / restart drill</dd>
+            <dt><kbd>Esc</kbd></dt><dd>Pause and this menu</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
